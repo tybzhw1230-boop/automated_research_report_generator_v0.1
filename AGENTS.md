@@ -1,3 +1,8 @@
+# Project-Specific Continuation Note
+
+Before starting work on this repository, read `PROJECT_HANDOFF.md`.
+That file stores the current cross-session working memory, decisions, GitHub status, and a compact transcript summary for resuming work after terminal/session changes.
+
 # AGENTS.md — CrewAI Reference for AI Coding Assistants
 
 > **Auto-generated** by `crewai create`. This file helps AI coding assistants
