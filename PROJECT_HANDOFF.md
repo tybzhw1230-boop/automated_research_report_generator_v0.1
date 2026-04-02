@@ -4,6 +4,7 @@
 
 This file is the working handoff for future agent sessions on this repository.
 Read it before making changes so the next session can resume with the same context.
+For the full exported conversation archive, read `PROJECT_CONVERSATIONS/INDEX.md`.
 
 ## Repository Status
 
@@ -11,6 +12,8 @@ Read it before making changes so the next session can resume with the same conte
 - Default branch: `main`
 - The repository was created and pushed from this local project on 2026-04-02.
 - The repository is currently intended to include the `pdf/` and `output/` directories because the user explicitly approved uploading those files.
+- The repository now includes `PROJECT_CONVERSATIONS/`, which exports 12 Codex sessions matched only from the current workspace path `C:\PyProjects\automated_research_report_generator_v0.1`.
+- Exported conversation markdown files are written as UTF-8 with BOM for better Windows compatibility, and tool outputs are sanitized to remove binary-noise lines and redact detected secrets.
 - Sensitive/local-only items still ignored: `.env`, `.venv/`, `.cache/`, `__pycache__/`, `.recycle`, `logs/`, `*.tmp`
 
 ## Session Transcript Summary
