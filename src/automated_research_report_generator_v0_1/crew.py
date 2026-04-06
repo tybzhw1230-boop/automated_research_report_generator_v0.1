@@ -22,8 +22,8 @@ DEFAULT_CREW_LOG_FILE = str(PROJECT_LOG_DIR / "crew_default.json")
 
 def get_llm(  # 设计：统一 LLM 入口；功能：按流程覆写采样与容错；可调：temperature 常用 0-1、timeout>0/None、max_retries>=0/None；默认 0.5/60/1 兼顾稳定与响应速度。
     temperature: float = 0.5,
-    timeout: float | int | None = 60,
-    max_retries: int | None = 1,
+    timeout: float | int | None = 10,
+    max_retries: int | None = 5,
 ) -> LLM:
     return LLM(
         api_base="https://openrouter.ai/api/v1",
