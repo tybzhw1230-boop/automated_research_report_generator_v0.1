@@ -1,0 +1,85 @@
+search_facts:
+  description: >
+    围绕 {company_name} 的 {pack_title} 执行外部搜索补证任务。
+
+    输入：
+    - 行业：{industry}
+    - 研究范围：{research_scope_text}
+    - 问题树：{question_tree_text}
+    - 当前 loop 原因：{loop_reason}
+    - 当前专题焦点：{pack_focus}
+    - 返工反馈：{qa_feedback}
+
+    执行要求：
+    - 先使用 `read_registry` 读取当前账本，重点处理 `target_pack="{pack_name}"` 的条目。
+    - 只处理当前 pack 负责的事实、数据和 judgment，不要越权写其他 pack。
+    - {search_guidance}
+    - 如果 `qa_feedback` 非空，优先处理其中属于搜索补证的缺口。
+    - 发现新事实、新数据或新 judgment 时，使用 `add_entry` 写回 registry。
+    - 每条新结论都要补 `add_evidence`，必要时调用 `status_update`。
+    - 任务结束前必须调用 `registry_review` 留痕。
+  expected_output: >
+    已完成当前 pack 的外部搜索补证，并把新增 entry、证据或状态变化同步到 registry。
+  agent: search_fact_agent
+
+extract_file_facts:
+  description: >
+    围绕 {company_name} 的 {pack_title} 执行 PDF 提取补证任务。
+
+    输入：
+    - PDF 文件路径：{pdf_file_path}
+    - 页面索引文件路径：{page_index_file_path}
+    - 当前 loop 原因：{loop_reason}
+    - 当前专题焦点：{pack_focus}
+    - 返工反馈：{qa_feedback}
+
+    执行要求：
+    - 先读取页码索引，再有选择地读取相关页面，不要盲读全文。
+    - {extract_guidance}
+    - 只处理 `target_pack="{pack_name}"` 的条目和直接相关的新发现。
+    - 如果 `qa_feedback` 非空，优先处理其中属于文件提取和原文核对的缺口。
+    - 发现新事实、新数据或新 judgment 时，使用 `add_entry` 写回 registry。
+    - 每条关键提取结果都要用 `add_evidence` 写明页码或原始来源。
+    - 任务结束前必须调用 `registry_review` 留痕。
+  expected_output: >
+    已完成当前 pack 的 PDF 取证，并把新增 entry、证据或状态变化同步到 registry。
+  agent: extract_file_fact_agent
+
+check_registry:
+  description: >
+    检查 {company_name} 的 {pack_title} 当前 registry 是否已经达到可综合输出的最低要求。
+
+    执行要求：
+    - 只检查 `target_pack="{pack_name}"` 的条目。
+    - {qa_guidance}
+    - 找出仍是 `open / in_progress / gap / conflicted` 的关键条目。
+    - 如果发现遗漏，使用 `status_update` 补充更具体的 `gap_note` 和 `next_action`。
+    - 你不负责新增正文内容；你只负责检查、标记和留痕。
+    - 任务结束前必须调用 `registry_review` 留痕。
+  expected_output: >
+    已完成当前 pack 的 registry 检查，并对遗漏项补充了 gap_note 与 next_action。
+  agent: qa_check_agent
+
+synthesize_and_output:
+  description: >
+    基于 registry 为 {company_name} 的 {pack_title} 生成最终 Markdown 分析包。
+
+    输入：
+    - 行业：{industry}
+    - 输出路径：{pack_output_path}
+    - 当前专题焦点：{pack_focus}
+
+    执行要求：
+    - 只综合 `target_pack="{pack_name}"` 的事实、数据、judgment 和相关证据。
+    - 在生成正文前，先检查 registry 中 `target_pack="{pack_name}"` 的所有 entry；必要时额外使用 `read_registry` 并设置 `filter_entry_type="data"`，单独检查数据条目是否仍有空位。
+    - 如果 data entry 的 `value` 仍为 `"待补"`，必须优先尝试补齐真实数值、单位、期间和口径；确实无法确认时，要在正文和 `registry_review` 里明确写出原因。
+    - 新增 entry 时必须遵守统一 ID 规则：`F_`/`D_`/`J_` + pack 缩写 + 三位序号，例如 `F_HIS_001`、`D_FIN_001`、`J_BUS_001`；pack 缩写固定使用 HIS/IND/BUS/PEER/FIN/OPS/RISK。
+    - 不得新建与已有 entry 内容重复的条目；如果只是补证据、补状态或补数值，应该更新已有 entry 或为已有 entry 追加 evidence。
+    - 明确区分：已被证据支持、存在冲突、仍未解决。
+    - 如果存在冲突，要写明冲突点和严重程度，不要静默忽略。
+    - {synthesize_guidance}
+    - 任务结束前必须调用 `registry_review` 留痕，说明本轮综合输出是否还有残余缺口。
+  expected_output: >
+    输出一份题为《{company_name} {output_title}》的 Markdown 分析包。
+  agent: synthesizing_agent
+  output_file: "{pack_output_path}"

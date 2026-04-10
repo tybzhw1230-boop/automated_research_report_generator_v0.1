@@ -1,0 +1,96 @@
+compile_report:
+  description: >
+    为 {company_name} 汇编最终版 v2 研究报告。
+
+    输入：
+    - 研究范围：
+      {research_scope_text}
+    - 历史与背景分析包：
+      {history_background_pack_text}
+    - 行业分析包：
+      {industry_pack_text}
+    - 业务分析包：
+      {business_pack_text}
+    - 同行信息分析包：
+      {peer_info_pack_text}
+    - 财务分析包：
+      {finance_pack_text}
+    - 运营指标分析包：
+      {operating_metrics_pack_text}
+    - 风险分析包：
+      {risk_pack_text}
+    - 可比公司分析包：
+      {peers_pack_text}
+    - 内在价值分析包：
+      {intrinsic_value_pack_text}
+    - 估值分析包：
+      {valuation_pack_text}
+    - 投资逻辑：
+      {investment_thesis_text}
+    - 尽调问题：
+      {diligence_questions_text}
+    - 最终 QA 备注：
+      {final_qa_summary}
+
+    执行要求：
+    - 输出必须是一份单独的 Markdown 报告。
+    - 报告结构必须严格遵守 expected_output 中定义的一级标题顺序，不得合并、删减任何上游材料对应章节。
+    - 每个章节都必须完整插入对应占位符的全部输出内容，仅允许做标题层级降级与基础排版整理。
+    - 不得总结、压缩、重写或改写任何正文内容，不得删改事实、数字、结论、风险表述和尽调事项。
+    - 如果前序材料存在冲突，只能在对应章节开头补充一小段“冲突说明”，随后仍需完整保留原文。
+  expected_output: |
+    严格按以下模板输出，不增删一级标题；每个章节都必须完整插入对应上游文本的全部输出内容，仅允许做标题层级降级与基础排版整理，不得改写任何正文内容。
+
+    # {company_name} 研究报告
+
+    ## 1. 投资逻辑
+        完整插入 {investment_thesis_text} 的全部输出内容，仅允许做标题层级降级与基础排版整理，不得改写任何正文内容。
+
+    ## 2. 尽调问题
+        完整插入 {diligence_questions_text} 的全部输出内容，仅允许做标题层级降级与基础排版整理，不得改写任何正文内容。
+
+    ## 3. 公司历史及股东
+        完整插入 {history_background_pack_text} 的全部输出内容，仅允许做标题层级降级与基础排版整理，不得改写任何正文内容。
+
+    ## 4. 行业分析
+        完整插入 {industry_pack_text} 的全部输出内容，仅允许做标题层级降级与基础排版整理，不得改写任何正文内容。
+
+    ## 5. 业务分析
+        完整插入 {business_pack_text} 的全部输出内容，仅允许做标题层级降级与基础排版整理，不得改写任何正文内容。
+
+    ## 6. 财务分析
+        完整插入 {finance_pack_text} 的全部输出内容，仅允许做标题层级降级与基础排版整理，不得改写任何正文内容。
+
+    ## 7. 运营指标分析
+        完整插入 {operating_metrics_pack_text} 的全部输出内容，仅允许做标题层级降级与基础排版整理，不得改写任何正文内容。
+
+    ## 8. 风险分析
+        完整插入 {risk_pack_text} 的全部输出内容，仅允许做标题层级降级与基础排版整理，不得改写任何正文内容。
+
+    ## 9. 可比公司估值
+        完整插入 {peers_pack_text} 的全部输出内容，仅允许做标题层级降级与基础排版整理，不得改写任何正文内容。
+
+    ## 10. 内在价值估值
+        完整插入 {intrinsic_value_pack_text} 的全部输出内容，仅允许做标题层级降级与基础排版整理，不得改写任何正文内容。
+
+    ## 11. 综合估值
+        完整插入 {valuation_pack_text} 的全部输出内容，仅允许做标题层级降级与基础排版整理，不得改写任何正文内容。
+
+    ## 12. QA摘要与结论边界
+        完整插入 {final_qa_summary} 的全部输出内容，仅允许做标题层级降级与基础排版整理，不得改写任何正文内容。
+  agent: report_editor
+  output_file: "{final_report_markdown_path}"
+
+export_final_report:
+  description: >
+    将为 {company_name} 编译好的 Markdown 报告转换成 PDF。
+
+    执行要求：
+    - 调用 markdown_to_pdf，并使用 markdown_path={final_report_markdown_path}
+    - 使用 pdf_path={final_report_pdf_path}
+    - 使用 title={company_name} 买方研究报告
+    - 不要修改 Markdown 正文
+    - 只做导出，不做内容改写
+  expected_output: |
+    PDF 已成功导出到：{final_report_pdf_path}
+  agent: report_editor

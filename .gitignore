@@ -1,6 +1,7 @@
 .env
 .venv/
 .cache/
+crewai_memory/
 __pycache__/
 *.py[cod]
 *.tmp
