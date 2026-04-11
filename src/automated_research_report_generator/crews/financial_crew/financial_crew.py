@@ -10,7 +10,7 @@ from crewai_tools import SerperDevTool
 
 from automated_research_report_generator.flow.common import PROJECT_ROOT
 from automated_research_report_generator.llm_config import get_heavy_llm
-from automated_research_report_generator.tools import AddEntryTool, AddEvidenceTool, FinancialModelTool, ReadRegistryTool, RegistryReviewTool, StatusUpdateTool
+from automated_research_report_generator.tools import AddEntryTool, AddEvidenceTool, FinancialModelTool, ReadRegistryTool, RegistryReviewTool, StatusUpdateTool, UpdateEntryTool
 from automated_research_report_generator.tools.pdf_page_tools import ReadPdfPageIndexTool, ReadPdfPagesTool
 
 PROJECT_LOG_DIR = PROJECT_ROOT / "logs"
@@ -71,7 +71,7 @@ class FinancialCrew:
         tools: list[object] = []
         if self.use_search_tool:
             tools.append(SerperDevTool())
-        tools.extend([ReadRegistryTool(), AddEntryTool(), AddEvidenceTool(), StatusUpdateTool(), RegistryReviewTool()])
+        tools.extend([ReadRegistryTool(), AddEntryTool(), UpdateEntryTool(), AddEvidenceTool(), StatusUpdateTool(), RegistryReviewTool()])
         tools.extend(self._extra_tools())
         return tools
 
@@ -84,7 +84,7 @@ class FinancialCrew:
         默认参数及原因：默认总是注入 PDF 工具，原因是财务专题必须优先回到原始披露材料取证。
         """
 
-        tools: list[object] = [shared_pdf_page_index_tool, shared_pdf_page_reader_tool, ReadRegistryTool(), AddEntryTool(), AddEvidenceTool(), StatusUpdateTool(), RegistryReviewTool()]
+        tools: list[object] = [shared_pdf_page_index_tool, shared_pdf_page_reader_tool, ReadRegistryTool(), AddEntryTool(), UpdateEntryTool(), AddEvidenceTool(), StatusUpdateTool(), RegistryReviewTool()]
         tools.extend(self._extra_tools())
         return tools
 
@@ -108,7 +108,7 @@ class FinancialCrew:
         默认参数及原因：默认不提供新增证据能力，原因是综合阶段应只基于已沉淀账本输出。
         """
 
-        return [ReadRegistryTool(), RegistryReviewTool(), StatusUpdateTool()]
+        return [ReadRegistryTool(), UpdateEntryTool(), RegistryReviewTool(), StatusUpdateTool()]
 
     def _build_agent(self, *, config_name: str, tools: list[object], temperature: float | None = None) -> Agent:
         """
@@ -149,7 +149,7 @@ class FinancialCrew:
     def qa_check_agent(self) -> Agent:
         """
         目的：定义财务专题的内部 QA agent。
-        功能：检查当前 finance pack 的 registry 覆盖度，并补 gap_note 与 next_action。
+        功能：检查当前 finance pack 的 registry 覆盖度，并补 revision_detail 与 review 留痕。
         实现逻辑：使用最小账本工具集，并把温度压低到更保守的水平。
         可调参数：YAML agent 配置、内部 QA 工具和模型温度。
         默认参数及原因：默认 `temperature=0.1`，原因是内部 QA 应优先保证判断稳定。

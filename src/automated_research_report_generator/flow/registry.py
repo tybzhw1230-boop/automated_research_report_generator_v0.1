@@ -6,23 +6,23 @@ import threading
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
+from typing import Any
+
+import yaml
 
 from automated_research_report_generator.flow.common import utc_timestamp
 from automated_research_report_generator.flow.models import (
     EvidenceRecord,
     EvidenceRegistrySnapshot,
     GateReviewOutput,
+    PACK_TO_REGISTRY_TOPIC,
     RegistryEntry,
     RegistryEntryType,
-    RegistrySeedPlan,
 )
 
 _REGISTRY_LOCKS_GUARD = threading.Lock()
 _REGISTRY_LOCKS: dict[str, threading.RLock] = {}
 
-LEGACY_PACK_NAME_MAP = {
-    "history_governance_pack": "history_background_pack",
-}
 RESEARCH_PACK_NAMES = [
     "history_background_pack",
     "industry_pack",
@@ -33,10 +33,10 @@ RESEARCH_PACK_NAMES = [
     "risk_pack",
 ]
 
-# 设计目的：维护 Flow 共享的证据账本，作为 planning、research、valuation、QA 和 writeup 的共同真相源。
-# 模块功能：初始化 registry、读写统一 entry、登记证据、渲染 Markdown 视图、生成快照和回写 gate 结果。
+# 设计目的：维护 Flow 共享的证据账本，作为 research、valuation、QA 和 writeup 的共同真相源。
+# 模块功能：初始化 registry、加载固定模板、读写统一 entry、登记证据、渲染 Markdown 视图、生成快照和回写 gate 结果。
 # 实现逻辑：底层始终存 JSON，同时在每次写盘后自动刷新 Markdown 视图和可选快照文件。
-# 可调参数：默认 seed、pack 归一化规则、Markdown 视图格式和 gate 回写策略。
+# 可调参数：模板路径、pack 归一化规则、Markdown 视图格式和 gate 回写策略。
 # 默认参数及原因：registry 固定保存为 UTF-8 JSON，原因是便于工具读写、调试和人工复查。
 
 
@@ -50,19 +50,6 @@ def _normalize_registry_path(registry_path: str | Path) -> str:
     """
 
     return Path(registry_path).expanduser().resolve().as_posix()
-
-
-def _normalize_pack_name(pack_name: str) -> str:
-    """
-    目的：在新旧 pack 命名并存时收口到统一 pack 名。
-    功能：把旧 `history_governance_pack` 等名称转换成当前主命名。
-    实现逻辑：先去空白，再查映射表，不命中就原样返回。
-    可调参数：`pack_name`。
-    默认参数及原因：未知 pack 原样返回，原因是设计允许后续继续扩展新 pack。
-    """
-
-    normalized_name = pack_name.strip()
-    return LEGACY_PACK_NAME_MAP.get(normalized_name, normalized_name)
 
 
 def _get_registry_lock(registry_path: str | Path) -> threading.RLock:
@@ -100,286 +87,278 @@ def _registry_transaction(registry_path: str | Path):
         yield normalized_path
 
 
-def default_seed_entries(company_name: str, industry: str) -> list[RegistryEntry]:
+def _default_template_path() -> Path:
     """
-    目的：为 registry 提供稳定的初始 entry 骨架。
-    功能：生成覆盖研究、估值和写作链路的最小事实、数据和判断集合。
-    实现逻辑：先给出少量跨 pack 的通用种子，再由 planning 阶段的结构化输出整体替换。
-    可调参数：公司名、行业名以及各条 seed 文案。
-    默认参数及原因：默认种子量保持小而全，原因是初始化阶段要先保证结构可跑，再由下游细化。
+    目的：给固定 registry 模板提供稳定入口。
+    功能：返回 `flow/config/registry_template.yaml` 的绝对路径。
+    实现逻辑：基于当前模块目录拼接相对路径。
+    可调参数：当前无显式参数。
+    默认参数及原因：模板路径固定，原因是当前只维护一套全局 research 模板。
     """
 
+    return Path(__file__).resolve().parent / "config" / "registry_template.yaml"
+
+
+def load_registry_template(
+    company_name: str,
+    industry: str,
+    template_path: str | Path | None = None,
+) -> list[RegistryEntry]:
+    """
+    目的：把固定 YAML 模板加载成可直接落盘的 registry entries。
+    功能：读取模板、做占位符替换、校验唯一性，并返回结构化 entry 列表。
+    实现逻辑：先加载 YAML，再逐条做字符串插值和模型校验。
+    可调参数：公司名、行业名和可选模板路径。
+    默认参数及原因：模板路径默认使用仓库内固定文件，原因是当前重构目标是确定性初始化。
+    """
+
+    resolved_template_path = Path(template_path or _default_template_path()).expanduser().resolve()
+    raw_text = resolved_template_path.read_text(encoding="utf-8")
+    raw_entries = yaml.safe_load(raw_text) or []
+    if not isinstance(raw_entries, list):
+        raise ValueError("registry_template.yaml 的顶层结构必须是列表。")
+
+    entry_ids: set[str] = set()
+    entries: list[RegistryEntry] = []
+    format_values = {
+        "company_name": company_name,
+        "industry": industry,
+    }
+    for item in raw_entries:
+        if not isinstance(item, dict):
+            raise ValueError("registry_template.yaml 中的每个条目都必须是字典。")
+        payload = dict(item)
+        for key in ("title", "description", "content"):
+            if isinstance(payload.get(key), str):
+                payload[key] = payload[key].format(**format_values)
+        entry = RegistryEntry.model_validate(payload)
+        if entry.entry_id in entry_ids:
+            raise ValueError(f"registry 模板中存在重复 entry_id: {entry.entry_id}")
+        entry_ids.add(entry.entry_id)
+        entries.append(entry)
+    return entries
+
+
+def _entry_matches_filters(
+    entry: RegistryEntry,
+    *,
+    filter_entry_type: RegistryEntryType | None = None,
+    include_statuses: list[str] | None = None,
+    exclude_statuses: list[str] | None = None,
+    owner_crew: str = "",
+    topic: str = "",
+    title_contains: str = "",
+) -> bool:
+    """
+    目的：把 registry 常用过滤条件集中到一个判断函数里。
+    功能：按类型、状态、责任 crew、topic 和标题关键词过滤 entry。
+    实现逻辑：逐个应用过滤条件；只要有一项不满足就返回 `False`。
+    可调参数：各类过滤条件。
+    默认参数及原因：空过滤条件不生效，原因是默认读取应尽量宽松。
+    """
+
+    include_set = {status.strip() for status in include_statuses or [] if status.strip()}
+    exclude_set = {status.strip() for status in exclude_statuses or [] if status.strip()}
+    normalized_owner = owner_crew.strip()
+    normalized_topic = topic.strip()
+    keyword = title_contains.strip().lower()
+
+    if filter_entry_type and entry.entry_type != filter_entry_type:
+        return False
+    if include_set and entry.status not in include_set:
+        return False
+    if exclude_set and entry.status in exclude_set:
+        return False
+    if normalized_owner and entry.owner_crew != normalized_owner:
+        return False
+    if normalized_topic and entry.topic != normalized_topic:
+        return False
+    if keyword and keyword not in entry.title.lower():
+        return False
+    return True
+
+
+def _build_entry_evidence_index(
+    snapshot: EvidenceRegistrySnapshot,
+) -> dict[str, dict[str, list[str]]]:
+    """
+    目的：在渲染和过滤前集中整理 entry 到 evidence 的派生关联。
+    功能：按 entry_id 汇总 support/conflict/context 三类 evidence ID 列表。
+    实现逻辑：遍历 evidence 列表，再把每条 evidence 挂到其关联的 entry_id 名下。
+    可调参数：`snapshot`。
+    默认参数及原因：缺失关联时返回空字典，原因是 registry entry 不再把 evidence 反向索引持久化到 JSON。
+    """
+
+    evidence_index: dict[str, dict[str, list[str]]] = {}
+    for evidence in snapshot.evidence:
+        for entry_id in evidence.entry_ids:
+            linked = evidence_index.setdefault(
+                entry_id,
+                {
+                    "support": [],
+                    "conflict": [],
+                    "context": [],
+                },
+            )
+            linked[evidence.stance].append(evidence.evidence_id)
+    return evidence_index
+
+
+def _render_table_markdown(columns: list[str], rows: list[dict[str, str]]) -> list[str]:
+    """
+    目的：把 table 类型 entry 渲染成稳定的 Markdown 表格。
+    功能：返回表头、分隔行和数据行组成的多行文本。
+    实现逻辑：按 columns 固定顺序输出每一行，缺值时补空字符串。
+    可调参数：列头定义和行数据。
+    默认参数及原因：空表时返回占位行，原因是需要显式告诉 agent 当前还没补值。
+    """
+
+    header = "| " + " | ".join(columns) + " |"
+    divider = "| " + " | ".join(["---"] * len(columns)) + " |"
+    if not rows:
+        empty_row = "| " + " | ".join(["待补"] * len(columns)) + " |"
+        return [header, divider, empty_row]
     return [
-        RegistryEntry(
-            entry_id="fact_company_profile",
-            entry_type="fact",
-            title="公司基础信息待确认",
-            content=f"{company_name} 的设立背景、主营方向和关键里程碑需要先被确认。",
-            target_pack="history_background_pack",
-            owner_crew="history_background_crew",
-            priority="medium",
-            status="open",
-            source_ref="",
-            next_action="先从招股书和年报提取设立背景、核心事件和治理结构。",
-        ),
-        RegistryEntry(
-            entry_id="data_revenue_scale",
-            entry_type="data",
-            title="收入规模待标准化",
-            content=f"{company_name} 最近三个期间的收入规模需要完成标准化。",
-            target_pack="finance_pack",
-            owner_crew="financial_crew",
-            priority="high",
-            status="open",
-            unit="人民币",
-            period="最近三个期间",
-            calibration_note="先统一合并口径和单位。",
-            next_action="提取最近三个期间收入和利润基础表。",
-        ),
-        RegistryEntry(
-            entry_id="judgment_history_background",
-            entry_type="judgment",
-            title="治理结构是否稳健",
-            content=f"{company_name} 的治理结构和关键股东关系需要被明确验证。",
-            target_pack="history_background_pack",
-            owner_crew="history_background_crew",
-            priority="high",
-            status="open",
-            evidence_needed="股权结构、董事会结构、核心管理层和重大历史事件。",
-            next_action="梳理时间线、控股关系和管理层背景。",
-        ),
-        RegistryEntry(
-            entry_id="judgment_industry",
-            entry_type="judgment",
-            title="行业位置是否足够有利",
-            content=f"{industry} 的增长、竞争和监管结构是否支持 {company_name} 的长期成长。",
-            target_pack="industry_pack",
-            owner_crew="industry_crew",
-            priority="high",
-            status="open",
-            evidence_needed="行业增速、竞争格局、产业链位置和监管变化。",
-            next_action="先确认行业定义、驱动和竞争格局。",
-        ),
-        RegistryEntry(
-            entry_id="judgment_business",
-            entry_type="judgment",
-            title="商业模式是否具备扩张性",
-            content=f"{company_name} 的产品、客户和交付链条是否形成可复制的商业模式。",
-            target_pack="business_pack",
-            owner_crew="business_crew",
-            priority="high",
-            status="open",
-            evidence_needed="产品矩阵、客户结构、订单兑现、竞争优势和扩张路径。",
-            next_action="拆解产品、客户和交付逻辑。",
-        ),
-        RegistryEntry(
-            entry_id="judgment_peer_info",
-            entry_type="judgment",
-            title="可比公司池是否可靠",
-            content=f"{company_name} 的同行集合、同行经营数据和估值倍数需要先建立可靠底稿。",
-            target_pack="peer_info_pack",
-            owner_crew="peer_info_crew",
-            priority="high",
-            status="open",
-            evidence_needed="同行名单、主营差异、估值倍数和关键财务指标。",
-            next_action="先筛出最相关的 3 到 5 家同行。",
-        ),
-        RegistryEntry(
-            entry_id="judgment_finance",
-            entry_type="judgment",
-            title="利润质量是否站得住",
-            content=f"{company_name} 的盈利能力和现金转换质量是否足以支撑后续估值。",
-            target_pack="finance_pack",
-            owner_crew="financial_crew",
-            priority="high",
-            status="open",
-            evidence_needed="收入结构、毛利率、费用率、CFO、CapEx 和营运资本变化。",
-            next_action="统一财务口径并检查现金流转换。",
-        ),
-        RegistryEntry(
-            entry_id="judgment_operating_metrics",
-            entry_type="judgment",
-            title="关键运营指标是否改善",
-            content=f"{company_name} 的关键运营指标是否相对同行改善并支持成长叙事。",
-            target_pack="operating_metrics_pack",
-            owner_crew="operating_metrics_crew",
-            priority="medium",
-            status="open",
-            evidence_needed="订单、产能、客户数、出货量、利用率、单价等运营指标。",
-            next_action="先收集最能改变投资判断的运营指标。",
-        ),
-        RegistryEntry(
-            entry_id="judgment_risk",
-            entry_type="judgment",
-            title="关键风险是否已聚焦",
-            content=f"{company_name} 当前最值得优先跟踪的风险是否已经被聚焦并写清触发条件。",
-            target_pack="risk_pack",
-            owner_crew="risk_crew",
-            priority="high",
-            status="open",
-            evidence_needed="经营、客户、技术、财务、治理和外部环境风险证据。",
-            next_action="列出前 5 到 10 项高影响风险及监控指标。",
-        ),
-        RegistryEntry(
-            entry_id="judgment_peers_valuation",
-            entry_type="judgment",
-            title="相对估值是否合理",
-            content=f"{company_name} 的相对估值区间是否能被同行倍数和口径差异合理解释。",
-            target_pack="peers_pack",
-            owner_crew="valuation_crew",
-            priority="high",
-            status="open",
-            evidence_needed="同行倍数、可比性限制、估值区间和调整理由。",
-            next_action="基于 peer_info_pack 开始构建相对估值框架。",
-        ),
-        RegistryEntry(
-            entry_id="judgment_intrinsic_value",
-            entry_type="judgment",
-            title="内在价值假设是否可信",
-            content=f"{company_name} 的现金流、回报和折现假设是否有足够证据支撑。",
-            target_pack="intrinsic_value_pack",
-            owner_crew="valuation_crew",
-            priority="high",
-            status="open",
-            evidence_needed="收入增速、利润率、资本开支、折现率和终值假设。",
-            next_action="先确认估值核心假设和敏感性变量。",
-        ),
+        header,
+        divider,
+        *[
+            "| " + " | ".join(str(row.get(column, "")) for column in columns) + " |"
+            for row in rows
+        ],
     ]
+
+
+def _render_entry_block(entry: RegistryEntry, evidence_links: dict[str, list[str]]) -> list[str]:
+    """
+    目的：把单条 entry 渲染成适合 LLM 和人工一起阅读的 Markdown 小节。
+    功能：输出条目元信息、正文内容、修订说明和证据统计。
+    实现逻辑：单值型直接输出正文；表格型额外插入 Markdown 表格。
+    可调参数：`entry`。
+    默认参数及原因：默认保留完整元信息，原因是 QA 和 sub-crew 都需要就地判断下一步动作。
+    """
+
+    evidence_count = sum(len(items) for items in evidence_links.values())
+    lines = [
+        f"### {entry.entry_id} | {entry.title}",
+        f"- 类型：{entry.entry_type}",
+        f"- 主题：{entry.topic}",
+        f"- 责任 crew：{entry.owner_crew}",
+        f"- 优先级：{entry.priority}",
+        f"- 状态：{entry.status}",
+        f"- 内容形态：{entry.content_type}",
+        f"- 说明：{entry.description or '-'}",
+        f"- 来源：{entry.source or '-'}",
+        f"- 置信度：{entry.confidence or '-'}",
+        f"- 修订说明：{entry.revision_detail or '-'}",
+        f"- 证据数：{evidence_count}",
+    ]
+    if entry.content_type == "table":
+        lines.extend(["- 内容：", *_render_table_markdown(entry.columns, entry.content)])  # type: ignore[arg-type]
+    else:
+        lines.extend(
+            [
+                f"- 内容：{entry.content or '待补'}",
+                f"- 单位：{entry.unit or '-'}",
+                f"- 期间：{entry.period or '-'}",
+            ]
+        )
+    return lines
 
 
 def _render_markdown_from_snapshot(
     snapshot: EvidenceRegistrySnapshot,
     *,
-    target_pack: str = "",
     filter_entry_type: RegistryEntryType | None = None,
     include_statuses: list[str] | None = None,
     exclude_statuses: list[str] | None = None,
+    owner_crew: str = "",
+    topic: str = "",
+    title_contains: str = "",
 ) -> str:
     """
     目的：把当前 registry 快照渲染成适合 LLM 和人工阅读的 Markdown。
-    功能：按类型分组输出 facts、data、judgments，并支持 pack 和状态过滤。
-    实现逻辑：先过滤 entry，再按三类分别生成 Markdown 表格。
-    可调参数：target_pack、entry 类型和状态过滤条件。
-    默认参数及原因：默认输出三类完整视图，原因是 research QA 需要先看整体，再定位缺口。
+    功能：按责任 crew 分组输出 entry 详情，并附最近证据与备注。
+    实现逻辑：先过滤 entry，再按 owner_crew 和 entry_id 排序后分组渲染。
+    可调参数：类型、状态、owner、topic 和标题关键词过滤条件。
+    默认参数及原因：默认输出完整账本视图，原因是大多数审阅场景都需要先看全貌。
     """
 
-    normalized_target_pack = _normalize_pack_name(target_pack) if target_pack else ""
-    include_set = {status.strip() for status in (include_statuses or []) if status.strip()}
-    exclude_set = {status.strip() for status in (exclude_statuses or []) if status.strip()}
-    filtered_entries: list[RegistryEntry] = []
-    for entry in snapshot.entries:
-        if normalized_target_pack and _normalize_pack_name(entry.target_pack) != normalized_target_pack:
-            continue
-        if filter_entry_type and entry.entry_type != filter_entry_type:
-            continue
-        if include_set and entry.status not in include_set:
-            continue
-        if exclude_set and entry.status in exclude_set:
-            continue
-        filtered_entries.append(entry)
-
-    facts = [entry for entry in filtered_entries if entry.entry_type == "fact"]
-    data_entries = [entry for entry in filtered_entries if entry.entry_type == "data"]
-    judgment_entries = [entry for entry in filtered_entries if entry.entry_type == "judgment"]
-    pending_judgments = [
-        entry for entry in judgment_entries if entry.status in {"open", "in_progress", "gap", "conflicted"}
+    evidence_index = _build_entry_evidence_index(snapshot)
+    filtered_entries = [
+        entry
+        for entry in snapshot.entries
+        if _entry_matches_filters(
+            entry,
+            filter_entry_type=filter_entry_type,
+            include_statuses=include_statuses,
+            exclude_statuses=exclude_statuses,
+            owner_crew=owner_crew,
+            topic=topic,
+            title_contains=title_contains,
+        )
     ]
-    supported_judgments = [
-        entry for entry in judgment_entries if entry.status in {"supported", "confirmed", "closed"}
-    ]
+    filtered_entries.sort(
+        key=lambda entry: (
+            entry.owner_crew,
+            entry.priority,
+            entry.status,
+            entry.entry_id,
+        )
+    )
 
     lines = [
         f"# 证据注册表：{snapshot.company_name} | {snapshot.industry}",
         f"更新时间：{snapshot.updated_at}",
-        "",
-        f"## 事实 (共 {len(facts)} 条)",
-        "| ID | 标题 | 内容 | 来源 | Pack | 状态 |",
-        "| --- | --- | --- | --- | --- | --- |",
+        f"条目数：{len(filtered_entries)} / {len(snapshot.entries)}",
+        f"证据数：{len(snapshot.evidence)}",
     ]
-    if facts:
-        for entry in facts:
-            lines.append(
-                f"| {entry.entry_id} | {entry.title} | {entry.content} | {entry.source_ref or '-'} | "
-                f"{entry.target_pack} | {entry.status} |"
-            )
-    else:
-        lines.append("| - | - | - | - | - | - |")
+    if owner_crew:
+        lines.append(f"责任 crew 过滤：{owner_crew}")
+    if topic:
+        lines.append(f"主题过滤：{topic}")
+    lines.append("")
 
-    lines.extend(
-        [
-            "",
-            f"## 数据 (共 {len(data_entries)} 条)",
-            "| ID | 指标 | 值 | 单位 | 期间 | 口径 | Pack | 状态 |",
-            "| --- | --- | --- | --- | --- | --- | --- | --- |",
-        ]
-    )
-    if data_entries:
-        for entry in data_entries:
-            lines.append(
-                f"| {entry.entry_id} | {entry.title} | {entry.value or entry.content} | {entry.unit or '-'} | "
-                f"{entry.period or '-'} | {entry.calibration_note or '-'} | {entry.target_pack} | {entry.status} |"
-            )
+    if not filtered_entries:
+        lines.append("当前过滤条件下没有匹配的 entry。")
     else:
-        lines.append("| - | - | - | - | - | - | - | - |")
+        current_owner = ""
+        for entry in filtered_entries:
+            if entry.owner_crew != current_owner:
+                current_owner = entry.owner_crew
+                lines.extend(["", f"## {current_owner}"])
+            lines.extend(_render_entry_block(entry, evidence_index.get(entry.entry_id, {})))
+            lines.append("")
 
-    lines.extend(
-        [
-            "",
-            f"## 判断 (共 {len(judgment_entries)} 条)",
-            "### ⚠ 待补证据 (gap/open/conflicted/in_progress)",
-            "| ID | 标题 | 判断 | Pack | 状态 | 冲突程度 | 缺口 | 下一步 |",
-            "| --- | --- | --- | --- | --- | --- | --- | --- |",
-        ]
-    )
-    if pending_judgments:
-        for entry in pending_judgments:
+    recent_evidence = snapshot.evidence[-10:]
+    if recent_evidence:
+        lines.extend(["## 最近证据"])
+        for evidence in recent_evidence:
             lines.append(
-                f"| {entry.entry_id} | {entry.title} | {entry.content} | {entry.target_pack} | {entry.status} | "
-                f"{entry.conflict_severity} | {entry.gap_note or '-'} | {entry.next_action or '-'} |"
+                f"- {evidence.evidence_id} | {evidence.title} | {evidence.stance} | "
+                f"{evidence.pack_name} | {evidence.source_ref or '-'}"
             )
-    else:
-        lines.append("| - | - | - | - | - | - | - | - |")
-
-    lines.extend(
-        [
-            "",
-            "### ✓ 已支持 (supported/confirmed/closed)",
-            "| ID | 标题 | 判断 | Pack | 证据数 |",
-            "| --- | --- | --- | --- | --- |",
-        ]
-    )
-    if supported_judgments:
-        for entry in supported_judgments:
-            evidence_count = (
-                len(entry.supporting_evidence_ids)
-                + len(entry.conflicting_evidence_ids)
-                + len(entry.context_evidence_ids)
-            )
-            lines.append(
-                f"| {entry.entry_id} | {entry.title} | {entry.content} | {entry.target_pack} | {evidence_count} |"
-            )
-    else:
-        lines.append("| - | - | - | - | - |")
 
     if snapshot.notes:
         lines.extend(["", "## 最近备注", *[f"- {note}" for note in snapshot.notes[-10:]]])
 
-    return "\n".join(lines)
+    return "\n".join(lines).strip()
 
 
 def render_registry_markdown(
     registry_path: str | Path,
     *,
-    target_pack: str = "",
     filter_entry_type: RegistryEntryType | None = None,
     include_statuses: list[str] | None = None,
     exclude_statuses: list[str] | None = None,
+    owner_crew: str = "",
+    topic: str = "",
+    title_contains: str = "",
 ) -> str:
     """
     目的：给 QA、crew agent 和人工调试提供稳定的 Markdown 视图。
-    功能：读取 registry 后输出按类型分组的 Markdown 表格。
+    功能：读取 registry 后输出分组后的 Markdown 条目清单。
     实现逻辑：先加载快照，再调用统一渲染函数。
-    可调参数：pack 过滤、entry 类型过滤和状态过滤。
+    可调参数：类型、状态、owner、topic 和标题关键词过滤。
     默认参数及原因：默认输出完整账本视图，原因是大多数审阅场景都需要先看全貌。
     """
 
@@ -387,10 +366,12 @@ def render_registry_markdown(
         snapshot = load_registry(registry_path)
         return _render_markdown_from_snapshot(
             snapshot,
-            target_pack=target_pack,
             filter_entry_type=filter_entry_type,
             include_statuses=include_statuses,
             exclude_statuses=exclude_statuses,
+            owner_crew=owner_crew,
+            topic=topic,
+            title_contains=title_contains,
         )
 
 
@@ -437,22 +418,46 @@ def load_registry(registry_path: str | Path) -> EvidenceRegistrySnapshot:
         return EvidenceRegistrySnapshot.model_validate_json(path.read_text(encoding="utf-8"))
 
 
-def initialize_registry(company_name: str, industry: str, registry_path: str | Path) -> str:
+def initialize_registry_from_template(
+    company_name: str,
+    industry: str,
+    entries: list[RegistryEntry],
+    registry_path: str | Path,
+) -> str:
     """
-    目的：为 Flow 初始化一份干净的 evidence registry。
-    功能：写入公司信息、默认 seed entry 和初始说明。
-    实现逻辑：先生成默认 seed，再调用统一保存入口落盘。
-    可调参数：公司名、行业名和 registry 路径。
-    默认参数及原因：初始化时只写骨架，不预放证据，原因是证据必须随研究逐步进入账本。
+    目的：把已校验好的模板 entries 写成一份完整的 registry。
+    功能：创建公司信息、entry 列表和初始备注，并一次性落盘。
+    实现逻辑：直接构造 `EvidenceRegistrySnapshot` 后调用统一保存入口。
+    可调参数：公司名、行业名、entry 列表和 registry 路径。
+    默认参数及原因：初始化时不预放证据，原因是证据必须随研究逐步进入账本。
     """
 
     snapshot = EvidenceRegistrySnapshot(
         company_name=company_name,
         industry=industry,
-        entries=default_seed_entries(company_name, industry),
-        notes=["Seeded registry from v0.3 unified entry template."],
+        entries=entries,
+        notes=["Seeded registry from deterministic YAML template."],
     )
     return save_registry(snapshot, registry_path)
+
+
+def initialize_registry(
+    company_name: str,
+    industry: str,
+    registry_path: str | Path,
+    *,
+    template_path: str | Path | None = None,
+) -> str:
+    """
+    目的：为 Flow 初始化一份干净的 evidence registry。
+    功能：加载固定模板并把模板条目落盘到 registry。
+    实现逻辑：先读取模板，再调用统一的模板初始化函数。
+    可调参数：公司名、行业名、registry 路径和可选模板路径。
+    默认参数及原因：默认使用仓库内模板文件，原因是当前 planning 已改为确定性初始化。
+    """
+
+    entries = load_registry_template(company_name, industry, template_path=template_path)
+    return initialize_registry_from_template(company_name, industry, entries, registry_path)
 
 
 def entry_ids_for_packs(
@@ -464,22 +469,25 @@ def entry_ids_for_packs(
     """
     目的：按当前 registry 里的真实 entry 集合动态查找 pack 对应的 entry ID。
     功能：读取账本后返回指定 pack 列表下的 entry ID，且自动去重保序。
-    实现逻辑：先读取快照，再按 pack 和类型筛选。
+    实现逻辑：先把 pack 映射到 registry topic，再按 topic 和类型筛选。
     可调参数：`pack_names` 和可选的 `entry_types` 过滤条件。
-    默认参数及原因：找不到时返回空列表，原因是 planning 可能主动裁掉某些 pack。
+    默认参数及原因：找不到时返回空列表，原因是 QA 反馈可能只命中部分 pack。
     """
 
     with _registry_transaction(registry_path) as path:
         if not path.exists():
             return []
         snapshot = load_registry(path)
-        pack_name_set = {_normalize_pack_name(pack_name) for pack_name in pack_names if pack_name.strip()}
+        topic_set = {
+            PACK_TO_REGISTRY_TOPIC[pack_name]
+            for pack_name in pack_names
+            if pack_name.strip() and pack_name in PACK_TO_REGISTRY_TOPIC
+        }
         entry_type_set = set(entry_types or [])
         ordered_entry_ids: list[str] = []
         seen_entry_ids: set[str] = set()
-
         for entry in snapshot.entries:
-            if _normalize_pack_name(entry.target_pack) not in pack_name_set:
+            if topic_set and entry.topic not in topic_set:
                 continue
             if entry_type_set and entry.entry_type not in entry_type_set:
                 continue
@@ -487,54 +495,9 @@ def entry_ids_for_packs(
                 continue
             seen_entry_ids.add(entry.entry_id)
             ordered_entry_ids.append(entry.entry_id)
-
         return ordered_entry_ids
 
 
-def replace_registry_entries(registry_path: str | Path, seed_plan: RegistrySeedPlan) -> list[str]:
-    """
-    目的：让 planning 阶段可以用结构化 seed 覆盖默认骨架。
-    功能：把 planning 输出的 seed entry 转换成 `RegistryEntry`，整体替换当前 registry 的 entries。
-    实现逻辑：只在收到非空 seed 集时执行覆盖，并追加备注保留追踪信息。
-    可调参数：`registry_path` 和 `seed_plan`。
-    默认参数及原因：当 `seed_plan.entries` 为空时直接跳过，原因是空结果不应抹掉默认骨架。
-    """
-
-    if not seed_plan.entries:
-        return []
-
-    with _registry_transaction(registry_path):
-        snapshot = load_registry(registry_path)
-        snapshot.entries = [
-            RegistryEntry(
-                entry_id=item.entry_id,
-                entry_type=item.entry_type,
-                title=item.title,
-                content=item.content,
-                entry_origin="planner",
-                owner_crew=item.owner_crew,
-                target_pack=_normalize_pack_name(item.target_pack),
-                priority=item.priority,
-                status="open",
-                source_ref=item.source_ref,
-                next_action=item.next_action,
-                value=item.value,
-                unit=item.unit,
-                period=item.period,
-                calibration_note=item.calibration_note,
-                parent_entry_id=item.parent_entry_id,
-                entry_level=item.entry_level,
-                evidence_needed=item.evidence_needed,
-            )
-            for item in seed_plan.entries
-        ]
-        summary = seed_plan.summary.strip()
-        if summary:
-            snapshot.notes.append(f"planner_seed: replaced entries | {summary[:500]}")
-        else:
-            snapshot.notes.append(f"planner_seed: replaced entries | entry_count={len(snapshot.entries)}")
-        save_registry(snapshot, registry_path)
-        return [entry.entry_id for entry in snapshot.entries]
 def find_entry(snapshot: EvidenceRegistrySnapshot, entry_id: str) -> RegistryEntry | None:
     """
     目的：避免多个写操作各自手写 entry 查找逻辑。
@@ -548,6 +511,8 @@ def find_entry(snapshot: EvidenceRegistrySnapshot, entry_id: str) -> RegistryEnt
         if entry.entry_id == entry_id:
             return entry
     return None
+
+
 def register_evidence(
     registry_path: str | Path,
     *,
@@ -563,12 +528,12 @@ def register_evidence(
     """
     目的：把 pack、QA 或人工整理出的新证据挂到 registry 上。
     功能：创建 `EvidenceRecord`，并把证据关联到对应 entry。
-    实现逻辑：在同一事务里追加证据、更新 entry 状态和更新时间，再统一保存。
+    实现逻辑：在同一事务里追加证据、更新证据 ID 关联和必要的修订状态，再统一保存。
     可调参数：证据标题、摘要、来源、pack、关联 entry 列表和 stance。
-    默认参数及原因：`stance` 默认 `support`，因为大多数新增证据首先用于支持判断。
+    默认参数及原因：`stance` 默认 `support`，因为大多数新增证据首先用于支持已有结论。
     """
 
-    normalized_pack_name = _normalize_pack_name(pack_name)
+    normalized_pack_name = pack_name.strip()
     with _registry_transaction(registry_path):
         snapshot = load_registry(registry_path)
         evidence_id = f"ev_{uuid.uuid4().hex[:12]}"
@@ -590,17 +555,14 @@ def register_evidence(
             if not entry:
                 continue
             if stance == "conflict":
-                target_list = entry.conflicting_evidence_ids
-                entry.status = "conflicted"
-                entry.conflict_severity = "major" if entry.conflict_severity == "none" else entry.conflict_severity
-            elif stance == "context":
-                target_list = entry.context_evidence_ids
-            else:
-                target_list = entry.supporting_evidence_ids
-                if entry.status in {"open", "in_progress", "gap"}:
-                    entry.status = "supported"
-            if evidence_id not in target_list:
-                target_list.append(evidence_id)
+                entry.status = "need_revision"
+                if title and title not in entry.revision_detail:
+                    detail_prefix = "新增冲突证据："
+                    entry.revision_detail = (
+                        f"{entry.revision_detail}；{detail_prefix}{title}"
+                        if entry.revision_detail
+                        else f"{detail_prefix}{title}"
+                    )
             entry.last_updated_at = utc_timestamp()
 
         save_registry(snapshot, registry_path)
@@ -611,7 +573,7 @@ def add_discovered_entry(registry_path: str | Path, entry: RegistryEntry) -> Non
     """
     目的：把研究过程中新增的 entry 安全追加到 registry。
     功能：先检查是否重号，再把新 entry 写回快照。
-    实现逻辑：命中重复 `entry_id` 时直接跳过，避免重复创建同一问题。
+    实现逻辑：命中重复 `entry_id` 时直接跳过，避免重复创建同一条记录。
     可调参数：`registry_path` 和 `entry`。
     默认参数及原因：重复时直接跳过，原因是运行期发现问题宁可保守也不要制造重复记录。
     """
@@ -620,23 +582,53 @@ def add_discovered_entry(registry_path: str | Path, entry: RegistryEntry) -> Non
         snapshot = load_registry(registry_path)
         if find_entry(snapshot, entry.entry_id):
             return
-        entry.target_pack = _normalize_pack_name(entry.target_pack)
         snapshot.entries.append(entry)
         save_registry(snapshot, registry_path)
+
+
+def update_entry_fields(
+    registry_path: str | Path,
+    entry_id: str,
+    **fields: Any,
+) -> None:
+    """
+    目的：给已存在的 entry 提供受控的字段更新入口。
+    功能：按 `entry_id` 更新正文、表格、来源、状态和修订说明等核心字段。
+    实现逻辑：先取出现有 entry，再用“旧值 + 新字段”重建模型并回写。
+    可调参数：`entry_id` 和任意允许覆盖的 entry 字段。
+    默认参数及原因：只忽略值为 `None` 的字段，原因是空字符串和空列表也可能是合法更新。
+    """
+
+    with _registry_transaction(registry_path):
+        snapshot = load_registry(registry_path)
+        for index, existing_entry in enumerate(snapshot.entries):
+            if existing_entry.entry_id != entry_id:
+                continue
+            payload = existing_entry.model_dump()
+            for key, value in fields.items():
+                if value is None or key not in payload:
+                    continue
+                payload[key] = value
+            payload["last_updated_at"] = utc_timestamp()
+            snapshot.entries[index] = RegistryEntry.model_validate(payload)
+            save_registry(snapshot, registry_path)
+            return
+        raise ValueError(f"Entry not found: {entry_id}")
+
+
 def update_entry_status(
     registry_path: str | Path,
     entry_ids: list[str],
     *,
     status: str,
-    gap_note: str = "",
-    next_action: str = "",
+    revision_detail: str = "",
 ) -> None:
     """
     目的：统一更新 entry 状态，避免不同模块各自写状态回写逻辑。
-    功能：批量更新状态、缺口说明、下一步动作和更新时间。
+    功能：批量更新状态、修订说明和更新时间。
     实现逻辑：在同一事务里逐条更新命中的 entry 后统一保存。
-    可调参数：entry 列表、目标状态、gap_note 和 next_action。
-    默认参数及原因：缺口说明和下一步动作默认空串，原因是并不是每次状态变化都需要补文字。
+    可调参数：entry 列表、目标状态和 revision_detail。
+    默认参数及原因：修订说明默认空串，原因是并不是每次状态变化都需要补文字。
     """
 
     with _registry_transaction(registry_path):
@@ -646,10 +638,8 @@ def update_entry_status(
             if not entry:
                 continue
             entry.status = status  # type: ignore[assignment]
-            if gap_note:
-                entry.gap_note = gap_note
-            if next_action:
-                entry.next_action = next_action
+            if revision_detail.strip():
+                entry.revision_detail = revision_detail.strip()
             entry.last_updated_at = utc_timestamp()
         save_registry(snapshot, registry_path)
 
@@ -688,11 +678,11 @@ def record_registry_review(
     默认参数及原因：entry 列表默认空列表，原因是有些审阅确实只是确认“当前无需改动”。
     """
 
-    normalized_new_ids = [entry_id for entry_id in (new_entry_ids or []) if entry_id]
-    normalized_touched_ids = [entry_id for entry_id in (touched_entry_ids or []) if entry_id]
+    normalized_new_ids = [entry_id for entry_id in new_entry_ids or [] if entry_id]
+    normalized_touched_ids = [entry_id for entry_id in touched_entry_ids or [] if entry_id]
     review_payload = {
         "reviewer": reviewer,
-        "pack_name": _normalize_pack_name(pack_name),
+        "pack_name": pack_name.strip(),
         "status": "updated" if has_changes else "no_change",
         "new_entry_ids": normalized_new_ids,
         "touched_entry_ids": normalized_touched_ids,
@@ -724,13 +714,14 @@ def summarize_registry(registry_path: str | Path) -> str:
                 {
                     "entry_id": entry.entry_id,
                     "entry_type": entry.entry_type,
+                    "content_type": entry.content_type,
+                    "topic": entry.topic,
+                    "owner_crew": entry.owner_crew,
                     "title": entry.title,
-                    "content": entry.content,
-                    "target_pack": entry.target_pack,
                     "status": entry.status,
                     "priority": entry.priority,
-                    "gap_note": entry.gap_note,
-                    "next_action": entry.next_action,
+                    "source": entry.source,
+                    "confidence": entry.confidence,
                 }
                 for entry in snapshot.entries
             ],
@@ -810,7 +801,7 @@ def apply_gate_review(
     功能：根据 `pass`、`revise`、`stop` 三种状态更新 entry 状态并追加备注。
     实现逻辑：先决定要回写的 entry 集合，再按状态批量更新并落备注。
     可调参数：阶段名、entry 列表和 QA 结果。
-    默认参数及原因：`revise` 回写为 `gap`，`stop` 回写为 `deferred`，方便 Flow 下一步识别分支。
+    默认参数及原因：`revise/stop` 都回写为 `need_revision`，原因是当前 research 自动返工只区分是否需要修订。
     """
 
     affected_entry_ids = list(entry_ids)
@@ -821,24 +812,25 @@ def apply_gate_review(
         update_entry_status(
             registry_path,
             affected_entry_ids,
-            status="supported",
-            next_action=f"{stage_name} gate passed.",
+            status="checked",
+            revision_detail=f"{stage_name} gate passed.",
         )
     elif review.status == "revise":
         update_entry_status(
             registry_path,
             affected_entry_ids,
-            status="gap",
-            gap_note="; ".join(review.key_gaps)[:500],
-            next_action="; ".join(review.priority_actions)[:500],
+            status="need_revision",
+            revision_detail=(
+                f"缺口：{'; '.join(review.key_gaps)[:500]}；"
+                f"动作：{'; '.join(review.priority_actions)[:500]}"
+            ).strip("；"),
         )
     else:
         update_entry_status(
             registry_path,
             affected_entry_ids,
-            status="deferred",
-            gap_note=f"{stage_name} gate requested stop.",
-            next_action="Stop the workflow and review manually.",
+            status="need_revision",
+            revision_detail=f"{stage_name} gate requested stop. 动作：Stop the workflow and review manually.",
         )
 
     note_payload = {

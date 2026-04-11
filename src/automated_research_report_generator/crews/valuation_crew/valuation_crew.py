@@ -20,6 +20,7 @@ from automated_research_report_generator.tools import (
     RegistryReviewTool,
     StatusUpdateTool,
     TushareValuationDataTool,
+    UpdateEntryTool,
 )
 from automated_research_report_generator.tools.pdf_page_tools import (
     ReadPdfPageIndexTool,
@@ -78,6 +79,7 @@ class ValuationCrew:
                 shared_pdf_page_index_tool,
                 shared_pdf_page_reader_tool,
                 AddEntryTool(),
+                UpdateEntryTool(),
                 AddEvidenceTool(),
                 ReadRegistryTool(),
                 StatusUpdateTool(),
@@ -119,6 +121,7 @@ class ValuationCrew:
                 shared_pdf_page_index_tool,
                 shared_pdf_page_reader_tool,
                 AddEntryTool(),
+                UpdateEntryTool(),
                 AddEvidenceTool(),
                 ReadRegistryTool(),
                 StatusUpdateTool(),

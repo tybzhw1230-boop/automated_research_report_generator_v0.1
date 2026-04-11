@@ -14,7 +14,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 CACHE_ROOT = PROJECT_ROOT / ".cache"
-DEFAULT_PDF_PATH = PROJECT_ROOT / "pdf" / "2026-02-27-H02256.HK-卧龙电驱-20260227臥龍電氣驅動集團股份有限公司申請版本（第一次呈交）全文檔案.pdf"
+DEFAULT_PDF_PATH = PROJECT_ROOT / "pdf" / "博瑞迪商业计划书v1.0.pdf"
 CREWAI_MEMORY_DIR = PROJECT_ROOT / "crewai_memory"
 RUN_ARTIFACT_DIR_NAME = "md"
 RUN_LOG_DIR_NAME = "logs"
@@ -30,7 +30,6 @@ RUN_DEBUG_MANIFEST_FILE_NAME = "run_manifest.json"
 BEIJING_TIMEZONE = timezone(timedelta(hours=8), name="Asia/Shanghai")
 
 CREW_LOG_NAMES = (
-    "planning_crew",
     "history_background_crew",
     "industry_crew",
     "business_crew",

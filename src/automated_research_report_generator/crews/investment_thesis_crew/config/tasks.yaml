@@ -81,8 +81,8 @@ draft_diligence_questions:
 
     执行要求：
     - 必须先使用 `read_registry` 工具读取完整账本。
-    - 优先处理状态不是 `supported` 或 `closed` 的 judgment。
-    - 其中 `conflicted` judgment 应视为最高优先级管理层问题。
+    - 优先处理状态不是 `checked` 的 judgment。
+    - 其中 `need_revision` judgment 应视为最高优先级管理层问题。
     - 只有在完成注册表审阅后，才使用投资逻辑优化分组、措辞和排序。
     - 本任务只读取 registry，不新增、修改或关闭 judgment。
     - 问题必须聚焦会实质改变投资判断的不确定性，不得泛泛而谈。

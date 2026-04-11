@@ -5,8 +5,6 @@ review_question_coverage:
     输入：
     - 阶段重点：
       {stage_focus}
-    - 问题树：
-      {question_tree_text}
     - 注册表 Markdown 视图：
       {registry_markdown_text}
     - 注册表增量变化摘要：
@@ -18,7 +16,8 @@ review_question_coverage:
 
     执行要求：
     - 必须先通读 Markdown 视图和增量摘要，再做判断。
-    - 如果需要核对具体 entry 或 evidence，使用 `read_registry` 工具，优先使用 `view="markdown"` 或按需钻取详情。
+    - 必须使用 `read_registry` 工具，优先以 `view="entry_list"`、`include_statuses=["unchecked","need_revision"]` 检查未闭合条目；必要时再按 `view="entry_detail"` 下钻。
+    - `high / medium` 优先级里仍是 `unchecked / need_revision` 的条目视为阻塞项；`low` 优先级只记录，不单独阻塞放行。
     - 必须判断当前阶段是否已经足够覆盖目标问题，从而可以继续推进。
     - 必须重点关注缺失的问题覆盖、证据缺口、未解决的新发现事项，以及跨 pack 不一致。
     - `affected_packs` 只填写需要定向重跑的 pack 名，如 `business_pack`、`peer_info_pack`。

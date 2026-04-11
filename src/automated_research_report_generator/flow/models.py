@@ -1,34 +1,36 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from automated_research_report_generator.flow.common import utc_timestamp
 
 # 设计目的：集中定义 Flow、registry、QA gate 和 checkpoint 共用的数据模型。
-# 模块功能：统一约束 registry entry、证据、planning seed、QA 结果和整条 Flow 状态。
-# 实现逻辑：使用 Pydantic 模型承接跨模块共享的数据，统一收口到 entry 命名。
-# 可调参数：各类 `Literal` 枚举值和字段默认值。
+# 模块功能：统一约束 registry entry、证据、QA 结果和整条 Flow 状态。
+# 实现逻辑：使用 Pydantic 模型承接跨模块共享的数据，并只保留当前 deterministic registry 真正使用的字段。
+# 可调参数：各类 `Literal` 枚举值、pack/topic 映射和字段默认值。
 # 默认参数及原因：时间字段统一走 `utc_timestamp()`，列表字段统一走 `default_factory`，原因是多轮运行更稳定。
 
-QuestionLevel = Literal["L1", "L2", "L3"]
-QuestionOrigin = Literal["seeded", "planner", "research", "valuation", "thesis", "qa", "discovered"]
 RegistryEntryType = Literal["fact", "data", "judgment"]
-QuestionStatus = Literal[
-    "open",
-    "in_progress",
-    "supported",
-    "conflicted",
-    "gap",
-    "confirmed",
-    "deferred",
-    "closed",
+RegistryContentType = Literal["single", "table"]
+RegistryEntryStatus = Literal["unchecked", "checked", "need_revision"]
+RegistryEntryPriority = Literal["high", "medium", "low"]
+RegistryTopic = Literal[
+    "history",
+    "industry",
+    "business",
+    "peer_info",
+    "financial",
+    "operating_metrics",
+    "risk",
+    "peers",
+    "intrinsic_value",
+    "valuation",
+    "investment_thesis",
 ]
-QuestionPriority = Literal["high", "medium", "low"]
+RegistryEvidenceStance = Literal["support", "conflict", "context"]
 CrewOwner = Literal[
-    "planning_crew",
-    "research_crew",
     "valuation_crew",
     "investment_thesis_crew",
     "qa_crew",
@@ -39,49 +41,185 @@ CrewOwner = Literal[
     "financial_crew",
     "operating_metrics_crew",
     "risk_crew",
+    "writeup_crew",
 ]
-GateStatus = Literal["pass", "revise", "stop"]
-EvidenceStance = Literal["support", "conflict", "context"]
-ConflictSeverity = Literal["none", "minor", "major"]
+ReviewGateStatus = Literal["pass", "revise", "stop"]
+
+PACK_TO_REGISTRY_TOPIC: dict[str, RegistryTopic] = {
+    "history_background_pack": "history",
+    "industry_pack": "industry",
+    "business_pack": "business",
+    "peer_info_pack": "peer_info",
+    "finance_pack": "financial",
+    "operating_metrics_pack": "operating_metrics",
+    "risk_pack": "risk",
+    "peers_pack": "peers",
+    "intrinsic_value_pack": "intrinsic_value",
+    "valuation_pack": "valuation",
+    "investment_thesis": "investment_thesis",
+    "diligence_questions": "investment_thesis",
+}
+TOPIC_TO_OWNER_CREW: dict[RegistryTopic, CrewOwner] = {
+    "history": "history_background_crew",
+    "industry": "industry_crew",
+    "business": "business_crew",
+    "peer_info": "peer_info_crew",
+    "financial": "financial_crew",
+    "operating_metrics": "operating_metrics_crew",
+    "risk": "risk_crew",
+    "peers": "valuation_crew",
+    "intrinsic_value": "valuation_crew",
+    "valuation": "valuation_crew",
+    "investment_thesis": "investment_thesis_crew",
+}
+OWNER_CREW_TO_DEFAULT_TOPIC: dict[CrewOwner, RegistryTopic] = {
+    "history_background_crew": "history",
+    "industry_crew": "industry",
+    "business_crew": "business",
+    "peer_info_crew": "peer_info",
+    "financial_crew": "financial",
+    "operating_metrics_crew": "operating_metrics",
+    "risk_crew": "risk",
+    "investment_thesis_crew": "investment_thesis",
+}
 
 
 class RegistryEntry(BaseModel):
     """
     目的：定义 registry 中统一的 entry 结构。
-    功能：同时表达事实、数据和判断三类条目。
-    实现逻辑：统一使用 entry 命名，不再接收旧 `question_* / judgment_*` 字段。
-    可调参数：entry 类型、状态、优先级、目标 pack、证据关联和数据口径字段。
-    默认参数及原因：默认按 judgment 处理，原因是当前大部分 seed 和 QA 仍围绕 judgment 展开。
+    功能：同时表达事实、数据和判断三类条目，并覆盖单值与表格两种内容形态。
+    实现逻辑：以 `topic + owner_crew + content_type + status` 作为唯一主语义，不再保留旧版 question registry 的过渡字段。
+    可调参数：entry 类型、topic、内容形态、状态、优先级和正文补充字段。
+    默认参数及原因：默认按 `judgment/single/unchecked` 处理，原因是初始化模板里单值判断仍是主体。
     """
 
     model_config = ConfigDict(populate_by_name=True)
 
     entry_id: str
     entry_type: RegistryEntryType = "judgment"
+    topic: RegistryTopic
+    owner_crew: CrewOwner
+    priority: RegistryEntryPriority = "high"
     title: str
-    content: str
-    entry_origin: QuestionOrigin = "seeded"
-    target_pack: str
-    owner_crew: CrewOwner = "planning_crew"
-    priority: QuestionPriority = "high"
-    status: QuestionStatus = "open"
-    conflict_severity: ConflictSeverity = "none"
-    source_ref: str = ""
-    gap_note: str = ""
-    next_action: str = ""
-    last_updated_at: str = Field(default_factory=utc_timestamp)
-
-    value: str = ""
+    description: str = ""
+    content_type: RegistryContentType = "single"
+    content: str | list[dict[str, str]] = ""
+    columns: list[str] = Field(default_factory=list)
     unit: str = ""
     period: str = ""
-    calibration_note: str = ""
+    source: str = ""
+    confidence: str = ""
+    status: RegistryEntryStatus = "unchecked"
+    revision_detail: str = ""
+    creator: str = "system"
+    last_updated_at: str = Field(default_factory=utc_timestamp)
 
-    parent_entry_id: str | None = None
-    entry_level: QuestionLevel = "L1"
-    evidence_needed: str = ""
-    supporting_evidence_ids: list[str] = Field(default_factory=list)
-    conflicting_evidence_ids: list[str] = Field(default_factory=list)
-    context_evidence_ids: list[str] = Field(default_factory=list)
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_payload(cls, raw_data: Any) -> Any:
+        """
+        目的：在模型加载前把输入压成当前 registry 的最小字段集。
+        功能：补齐 topic/owner、description、content_type、content 和 creator 等基础字段。
+        实现逻辑：先把输入转成字典，再按当前 deterministic registry 规则做最小规范化。
+        可调参数：`raw_data`。
+        默认参数及原因：缺失字段按当前模板语义补齐，原因是模板与工具都已经围绕这套字段工作。
+        """
+
+        if isinstance(raw_data, BaseModel):
+            payload = raw_data.model_dump()
+        elif isinstance(raw_data, dict):
+            payload = dict(raw_data)
+        else:
+            return raw_data
+
+        topic = str(payload.get("topic", "")).strip()
+        owner_crew = str(payload.get("owner_crew", "")).strip()
+        if not topic and owner_crew:
+            inferred_topic = OWNER_CREW_TO_DEFAULT_TOPIC.get(owner_crew)  # type: ignore[arg-type]
+            if inferred_topic:
+                payload["topic"] = inferred_topic
+        if topic and not owner_crew:
+            payload["owner_crew"] = TOPIC_TO_OWNER_CREW.get(topic, owner_crew)
+
+        if not str(payload.get("description", "")).strip():
+            payload["description"] = str(payload.get("title", "")).strip()
+
+        content = payload.get("content")
+        columns = payload.get("columns") or []
+        content_type = str(payload.get("content_type", "")).strip()
+        if not content_type:
+            content_type = "table" if columns or isinstance(content, list) else "single"
+            payload["content_type"] = content_type
+
+        if content is None:
+            if content_type == "table":
+                payload["content"] = []
+            else:
+                payload["content"] = ""
+
+        if not payload.get("creator"):
+            payload["creator"] = "system"
+
+        if not str(payload.get("entry_type", "")).strip():
+            entry_id = str(payload.get("entry_id", "")).upper()
+            prefix = entry_id.split("_", maxsplit=1)[0]
+            payload["entry_type"] = {
+                "F": "fact",
+                "D": "data",
+                "J": "judgment",
+            }.get(prefix, "data" if payload["content_type"] == "table" else "judgment")
+
+        return payload
+
+    @model_validator(mode="after")
+    def _validate_content_shape(self) -> "RegistryEntry":
+        """
+        目的：确保新 registry 中 `single/table` 两种内容形态稳定可序列化。
+        功能：校验表格列头、表格行结构，以及单值内容的字符串化。
+        实现逻辑：表格型统一补齐缺失列；单值型统一转成字符串并清空无效列头。
+        可调参数：当前无显式参数。
+        默认参数及原因：表格型缺列时报错，原因是后续 Markdown 渲染和工具筛选都依赖列头一致。
+        """
+
+        if self.content_type == "table":
+            if not self.columns:
+                raise ValueError("table 类型 entry 必须提供 columns。")
+            if not isinstance(self.content, list):
+                raise ValueError("table 类型 entry 的 content 必须是 list[dict]。")
+
+            normalized_rows: list[dict[str, str]] = []
+            known_columns = set(self.columns)
+            for row in self.content:
+                if not isinstance(row, dict):
+                    raise ValueError("table 类型 entry 的每一行都必须是 dict。")
+                extra_columns = {str(key) for key in row} - known_columns
+                if extra_columns:
+                    raise ValueError(f"table 行中出现未定义列：{sorted(extra_columns)}")
+                normalized_rows.append(
+                    {column: str(row.get(column, "")) for column in self.columns}
+                )
+            self.content = normalized_rows
+            if self.entry_type != "data":
+                self.entry_type = "data"
+            self.unit = ""
+            self.period = ""
+        else:
+            if isinstance(self.content, list):
+                raise ValueError("single 类型 entry 的 content 不能是列表。")
+            self.content = "" if self.content is None else str(self.content)
+            self.columns = []
+
+        if not self.description:
+            self.description = self.title
+
+        if not self.source:
+            self.source = ""
+        if not self.confidence:
+            self.confidence = ""
+        if not self.revision_detail:
+            self.revision_detail = ""
+
+        return self
 
 
 class EvidenceRecord(BaseModel):
@@ -100,7 +238,7 @@ class EvidenceRecord(BaseModel):
     source_ref: str
     pack_name: str
     entry_ids: list[str] = Field(default_factory=list)
-    stance: EvidenceStance = "support"
+    stance: RegistryEvidenceStance = "support"
     captured_at: str = Field(default_factory=utc_timestamp)
     note: str = ""
 
@@ -109,7 +247,7 @@ class EvidenceRegistrySnapshot(BaseModel):
     """
     目的：表达 registry 当前完整快照。
     功能：统一保存公司信息、entry 列表、证据列表和备注。
-    实现逻辑：把三类 entry 与证据一起放进同一快照模型，便于一次读写整份账本。
+    实现逻辑：把 entry 与证据一起放进同一快照模型，便于一次读写整份账本。
     可调参数：公司信息、entries、evidence、notes。
     默认参数及原因：列表字段默认空列表，原因是初始化时通常先搭框架再逐步补充。
     """
@@ -124,50 +262,6 @@ class EvidenceRegistrySnapshot(BaseModel):
     updated_at: str = Field(default_factory=utc_timestamp)
 
 
-class RegistrySeedEntryPlan(BaseModel):
-    """
-    目的：承接 planning 阶段输出的单条 registry seed。
-    功能：约束 seed 需要的最小字段，并允许输出 fact、data、judgment 三类 entry。
-    实现逻辑：统一使用 entry 字段名。
-    可调参数：entry 类型、层级、父级、优先级、owner_crew、数据口径和后续动作。
-    默认参数及原因：默认按 judgment/high/L1 处理，原因是 planning 输出里 judgment 仍是主体。
-    """
-
-    model_config = ConfigDict(populate_by_name=True)
-
-    entry_id: str
-    entry_type: RegistryEntryType = "judgment"
-    title: str
-    content: str
-    target_pack: str
-    evidence_needed: str = ""
-    owner_crew: CrewOwner
-    parent_entry_id: str | None = None
-    entry_level: QuestionLevel = "L1"
-    priority: QuestionPriority = "high"
-    source_ref: str = ""
-    next_action: str = ""
-    value: str = ""
-    unit: str = ""
-    period: str = ""
-    calibration_note: str = ""
-
-
-class RegistrySeedPlan(BaseModel):
-    """
-    目的：承接 planning 阶段的整份 registry seed 输出。
-    功能：保存规划摘要和一组可直接写入 registry 的 seed entry。
-    实现逻辑：统一使用 `entries` 字段。
-    可调参数：`summary` 与 `entries`。
-    默认参数及原因：entry 列表默认空列表，原因是 planning 异常时不应直接打断整条 Flow。
-    """
-
-    model_config = ConfigDict(populate_by_name=True)
-
-    summary: str = ""
-    entries: list[RegistrySeedEntryPlan] = Field(default_factory=list)
-
-
 class GateReviewOutput(BaseModel):
     """
     目的：统一 QA gate 的结构化输出格式。
@@ -177,7 +271,7 @@ class GateReviewOutput(BaseModel):
     默认参数及原因：列表字段默认空列表，原因是通过场景常常不需要额外动作。
     """
 
-    status: GateStatus
+    status: ReviewGateStatus
     summary: str
     key_gaps: list[str] = Field(default_factory=list)
     priority_actions: list[str] = Field(default_factory=list)
@@ -205,12 +299,8 @@ class ResearchFlowState(BaseModel):
     run_cache_dir: str = ""
     run_output_dir: str = ""
     evidence_registry_path: str = ""
-    research_scope_path: str = ""
-    question_tree_path: str = ""
-    evidence_map_seed_path: str = ""
 
     history_background_pack_path: str = ""
-    history_governance_pack_path: str = ""
     industry_pack_path: str = ""
     business_pack_path: str = ""
     peer_info_pack_path: str = ""

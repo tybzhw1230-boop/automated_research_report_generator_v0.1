@@ -9,50 +9,46 @@ from crewai.tools import BaseTool
 from pydantic import BaseModel, ConfigDict, Field
 
 from automated_research_report_generator.flow.models import (
-    CrewOwner,
+    OWNER_CREW_TO_DEFAULT_TOPIC,
+    TOPIC_TO_OWNER_CREW,
     EvidenceRegistrySnapshot,
-    EvidenceStance,
-    QuestionLevel,
-    QuestionOrigin,
-    QuestionPriority,
-    QuestionStatus,
+    RegistryEntryPriority,
+    RegistryEntryStatus,
+    RegistryEvidenceStance,
+    RegistryContentType,
     RegistryEntry,
     RegistryEntryType,
 )
 from automated_research_report_generator.flow.registry import (
     add_discovered_entry,
-    initialize_registry,
     load_registry,
     record_registry_review,
     register_evidence,
     render_registry_markdown,
+    update_entry_fields,
     update_entry_status,
 )
 
-# 设计目的：把 registry 工具从“只围绕 judgment JSON”扩展成“统一 entry + Markdown 视图”的单职责工具集合。
-# 模块功能：提供 add_entry、add_evidence、status_update、read_registry 和 registry_review 等工具。
+# 设计目的：把 registry 工具从“旧 question/judgment 账本”升级成“模板化 entry 账本”的单职责工具集合。
+# 模块功能：提供 add_entry、update_entry、add_evidence、status_update、read_registry 和 registry_review 等工具。
 # 实现逻辑：路径上下文仍保存在线程本地；读操作默认返回 Markdown，写操作统一落到 JSON registry。
 # 可调参数：各工具的 args_schema、registry 上下文路径以及读取视图类型。
 # 默认参数及原因：registry 路径继续保存在线程本地，原因是 Flow 当前的接线方式已经稳定且线程安全。
 
 _reg_ctx = threading.local()
-QUESTION_STATUS_PRIORITY = {
-    "conflicted": 0,
-    "gap": 1,
-    "open": 2,
-    "in_progress": 3,
-    "deferred": 4,
-    "supported": 5,
-    "confirmed": 6,
-    "closed": 7,
+ENTRY_STATUS_PRIORITY = {
+    "need_revision": 0,
+    "unchecked": 1,
+    "checked": 2,
 }
-QUESTION_PRIORITY_ORDER = {
+ENTRY_PRIORITY_ORDER = {
     "high": 0,
     "medium": 1,
     "low": 2,
 }
 ReadRegistryView = Literal[
     "markdown",
+    "entry_list",
     "full",
     "entry_detail",
     "evidence_detail",
@@ -89,46 +85,57 @@ def set_evidence_registry_context(registry_path: str) -> None:
 class AddEntryInput(BaseModel):
     """
     目的：为新增 entry 工具提供明确、稳定的结构化输入。
-    功能：同时支持 fact、data、judgment 三类 entry 的写入。
-    实现逻辑：统一使用 entry 字段作为主接口。
-    可调参数：entry 类型、层级、归属 crew、优先级、数据口径和补充说明字段。
-    默认参数及原因：默认写 judgment/open/medium，原因是运行中新增条目最常见的是待验证判断。
+    功能：支持 fact、data、judgment 三类 entry，以及 single/table 两种内容形态。
+    实现逻辑：统一使用 entry 字段作为主接口；缺失 topic 或 owner 时仅在能唯一推断时自动补齐。
+    可调参数：entry 类型、内容形态、归属 crew、优先级和正文补充字段。
+    默认参数及原因：默认写 `judgment/single/unchecked/medium`，原因是运行中新增条目最常见的是待验证判断。
     """
 
     entry_id: str = Field(..., description="唯一 entry ID。")
     entry_type: RegistryEntryType = Field(default="judgment", description="entry 类型。")
+    topic: str = Field(default="", description="entry 所属主题；留空时仅在 owner_crew 可唯一映射时自动推断。")
+    owner_crew: str = Field(default="", description="负责该 entry 的 crew；留空时仅在 topic 可唯一映射时自动推断。")
+    priority: RegistryEntryPriority = Field(default="medium", description="entry 优先级。")
     title: str = Field(..., description="entry 标题。")
-    content: str = Field(..., description="entry 正文。")
-    target_pack: str = Field(..., description="该 entry 后续应归入的分析 pack。")
-    evidence_needed: str = Field(default="", description="如果是 judgment，这里写后续还需要的证据。")
-    parent_entry_id: str | None = Field(default=None, description="父级 entry ID。")
-    entry_level: QuestionLevel = Field(default="L2", description="entry 层级。")
-    entry_origin: QuestionOrigin = Field(default="discovered", description="entry 来源。")
-    owner_crew: CrewOwner = Field(default="research_crew", description="默认负责该 entry 的 crew。")
-    priority: QuestionPriority = Field(default="medium", description="entry 优先级。")
-    status: QuestionStatus = Field(default="open", description="entry 状态。")
-    source_ref: str = Field(default="", description="来源引用。")
-    gap_note: str = Field(default="", description="当前缺口说明。")
-    next_action: str = Field(default="", description="下一步动作。")
-    value: str = Field(default="", description="数据类 entry 的数值。")
-    unit: str = Field(default="", description="数据类 entry 的单位。")
-    period: str = Field(default="", description="数据类 entry 的期间。")
-    calibration_note: str = Field(default="", description="数据类 entry 的口径说明。")
+    description: str = Field(default="", description="对该条目期望输出的指引。")
+    content_type: RegistryContentType = Field(default="single", description="内容形态。")
+    content: str | list[dict[str, str]] = Field(default="", description="single 为字符串，table 为行字典列表。")
+    columns: list[str] = Field(default_factory=list, description="table 类型的列头定义。")
+    unit: str = Field(default="", description="single 类型可选单位。")
+    period: str = Field(default="", description="single 类型可选期间。")
+    source: str = Field(default="", description="来源引用。")
+    confidence: str = Field(default="", description="当前结论的置信度说明。")
+    status: RegistryEntryStatus = Field(default="unchecked", description="entry 状态。")
+    revision_detail: str = Field(default="", description="如果需要返工，这里写修订说明。")
+    creator: str = Field(default="agent", description="创建者标识。")
 
 
-class RegistrySeedInput(BaseModel):
+class UpdateEntryInput(BaseModel):
     """
-    目的：给 planner 一个安全的 registry 初始化入口。
-    功能：支持根据公司名、行业和目标路径创建初始 registry，并同步设置当前上下文路径。
-    实现逻辑：按当前定义的输入、处理和返回顺序执行。
-    可调参数：company_name、industry、registry_path 和 force_reset。
-    默认参数及原因：force_reset 默认 `False`，原因是初始化工具默认应幂等，避免误调用覆盖已有账本。
+    目的：为更新既有 entry 的正文与元信息提供受控输入结构。
+    功能：支持只改必要字段，而不是整条 entry 全量重写。
+    实现逻辑：所有字段默认 `None` 或空串；工具只回写显式传入的字段。
+    可调参数：entry 类型、内容形态、正文、来源、状态和修订说明等。
+    默认参数及原因：默认只要求 `entry_id`，原因是模板化工作流里大多数更新都是局部补值。
     """
 
-    company_name: str = Field(..., description="公司名称。")
-    industry: str = Field(..., description="行业名称。")
-    registry_path: str = Field(default="", description="可选 registry 路径；留空时使用当前上下文路径。")
-    force_reset: bool = Field(default=False, description="是否强制重建已有 registry。")
+    entry_id: str = Field(..., description="要更新的 entry_id。")
+    entry_type: RegistryEntryType | None = Field(default=None, description="可选；如需修正 entry 类型时填写。")
+    topic: str = Field(default="", description="可选；如需修正主题时填写。")
+    owner_crew: str = Field(default="", description="可选；如需修正责任 crew 时填写。")
+    priority: RegistryEntryPriority | None = Field(default=None, description="可选；更新优先级。")
+    title: str = Field(default="", description="可选；如需修正标题时填写。")
+    description: str = Field(default="", description="可选；如需修正说明时填写。")
+    content_type: RegistryContentType | None = Field(default=None, description="可选；如需切换 single/table 时填写。")
+    content: str | list[dict[str, str]] | None = Field(default=None, description="可选；更新正文或表格内容。")
+    columns: list[str] | None = Field(default=None, description="可选；更新 table 列头。")
+    unit: str = Field(default="", description="可选；更新 single 类型单位。")
+    period: str = Field(default="", description="可选；更新 single 类型期间。")
+    source: str = Field(default="", description="可选；更新来源。")
+    confidence: str = Field(default="", description="可选；更新置信度说明。")
+    status: RegistryEntryStatus | None = Field(default=None, description="可选；更新状态。")
+    revision_detail: str = Field(default="", description="可选；更新修订说明。")
+    creator: str = Field(default="", description="可选；修正创建者。")
 
 
 class AddEvidenceInput(BaseModel):
@@ -146,23 +153,22 @@ class AddEvidenceInput(BaseModel):
     entry_ids: list[str] = Field(..., description="该证据支撑或冲突了哪些 entry。")
     source_type: str = Field(default="agent_output", description="证据来源类型。")
     source_ref: str = Field(default="", description="证据来源引用。")
-    stance: EvidenceStance = Field(default="support", description="证据立场。")
+    stance: RegistryEvidenceStance = Field(default="support", description="证据立场。")
     note: str = Field(default="", description="补充备注。")
 
 
 class StatusUpdateInput(BaseModel):
     """
     目的：把“更新 entry 状态”从通用修改动作里拆出来，只允许改受控字段。
-    功能：批量更新 entry 状态，并按需补充 gap_note 与 next_action。
+    功能：批量更新 entry 状态，并按需补充 revision_detail。
     实现逻辑：按当前定义的输入、处理和返回顺序执行。
-    可调参数：entry_ids、status、gap_note 和 next_action。
-    默认参数及原因：gap_note 和 next_action 默认空字符串，原因是并不是每次状态变化都需要补充说明。
+    可调参数：entry_ids、status 和 revision_detail。
+    默认参数及原因：说明字段默认空字符串，原因是并不是每次状态变化都需要补充说明。
     """
 
     entry_ids: list[str] = Field(..., description="需要更新的 entry_id 列表。")
-    status: QuestionStatus = Field(..., description="目标状态。")
-    gap_note: str = Field(default="", description="缺口说明。")
-    next_action: str = Field(default="", description="下一步动作。")
+    status: RegistryEntryStatus = Field(..., description="目标状态。")
+    revision_detail: str = Field(default="", description="修订说明。")
 
 
 class RegistryReviewInput(BaseModel):
@@ -186,17 +192,22 @@ class RegistryReviewInput(BaseModel):
 class ReadRegistryInput(BaseModel):
     """
     目的：把读取 registry 的常见查询模式收口到一个只读工具里。
-    功能：支持 Markdown 视图、完整 JSON、entry 详情和证据详情。
-    实现逻辑：默认输出 Markdown，需要下钻时再按 ID 读取详情。
-    可调参数：view、状态过滤、pack 过滤、entry 类型过滤和详情 ID 列表。
-    默认参数及原因：view 默认 `markdown`，原因是新版 agent 更适合先读 Markdown 视图。
+    功能：支持 Markdown、轻量 entry_list、完整 JSON、entry 详情和证据详情。
+    实现逻辑：默认输出 Markdown，需要更轻或更细时再切换视图。
+    可调参数：视图、状态过滤、owner/topic 过滤、标题关键词和详情 ID 列表。
+    默认参数及原因：view 默认 `markdown`，原因是新版 agent 更适合先读结构化 Markdown 视图。
     """
 
     view: ReadRegistryView = Field(default="markdown", description="读取视图。")
-    include_statuses: list[QuestionStatus] = Field(default_factory=list, description="只返回这些状态的 entry。")
-    exclude_statuses: list[QuestionStatus] = Field(default_factory=list, description="排除这些状态的 entry。")
-    target_pack: str = Field(default="", description="只返回指定 target_pack 的 entry。")
+    include_statuses: list[RegistryEntryStatus] = Field(default_factory=list, description="只返回这些状态的 entry。")
+    exclude_statuses: list[RegistryEntryStatus] = Field(default_factory=list, description="排除这些状态的 entry。")
+    owner_crew: str = Field(default="", description="按 owner_crew 精确筛选。")
+    topic: str = Field(default="", description="按 topic 精确筛选。")
+    title_contains: str = Field(default="", description="按标题关键字筛选。")
     filter_entry_type: RegistryEntryType | None = Field(default=None, description="按 entry 类型过滤。")
+    has_supporting_evidence: bool | None = Field(default=None, description="是否有 supporting evidence。")
+    has_conflicting_evidence: bool | None = Field(default=None, description="是否有 conflicting evidence。")
+    has_context_evidence: bool | None = Field(default=None, description="是否有 context evidence。")
     entry_ids: list[str] = Field(default_factory=list, description="按 ID 读取 entry 详情时使用。")
     evidence_ids: list[str] = Field(default_factory=list, description="按 ID 读取证据详情时使用。")
 
@@ -279,53 +290,64 @@ class _RegistryToolBase(BaseTool):
 
         return load_registry(self._require_registry_path())
 
-    def _infer_owner_from_pack(self, target_pack: str, owner_crew: CrewOwner) -> CrewOwner:
+    def _resolve_owner_and_topic(self, *, owner_crew: str, topic: str) -> tuple[str, str]:
         """
-        目的：尽量根据 target pack 自动推断 entry 的责任 crew，减少 agent 漏填时的错配。
-        功能：在 owner 仍是默认值时，根据 pack 名回填更合理的 owner_crew。
-        实现逻辑：优先识别新 research sub-crew，再识别 valuation 和 thesis 相关 pack。
-        可调参数：`target_pack` 和 `owner_crew`。
-        默认参数及原因：未知 pack 默认归 research_crew，原因是大多数新增 entry 发生在 research 阶段。
+        目的：把 owner_crew 和 topic 解析成当前 registry 能接受的最小组合。
+        功能：在只传入 topic 或只传入 owner_crew 时做有限自动推断；无法唯一推断时直接报错。
+        实现逻辑：优先用显式值，其次用 topic->owner 或 owner->default topic 映射补齐。
+        可调参数：`owner_crew` 和 `topic`。
+        默认参数及原因：valuation_crew 这类多 topic owner 不做模糊推断，原因是避免错误归类。
         """
 
-        normalized_target_pack = target_pack.strip()
-        pack_to_owner: dict[str, CrewOwner] = {
-            "history_background_pack": "history_background_crew",
-            "industry_pack": "industry_crew",
-            "business_pack": "business_crew",
-            "peer_info_pack": "peer_info_crew",
-            "finance_pack": "financial_crew",
-            "operating_metrics_pack": "operating_metrics_crew",
-            "risk_pack": "risk_crew",
-            "peers_pack": "valuation_crew",
-            "intrinsic_value_pack": "valuation_crew",
-            "valuation_pack": "valuation_crew",
-            "investment_thesis": "investment_thesis_crew",
-            "diligence_questions": "investment_thesis_crew",
-        }
-        return pack_to_owner.get(normalized_target_pack, owner_crew)
+        normalized_topic = topic.strip()
+        normalized_owner_crew = owner_crew.strip()
+        if normalized_topic and not normalized_owner_crew:
+            inferred_owner = TOPIC_TO_OWNER_CREW.get(normalized_topic)
+            if not inferred_owner:
+                raise ValueError(f"Unsupported registry topic: {normalized_topic}")
+            normalized_owner_crew = inferred_owner
+        if normalized_owner_crew and not normalized_topic:
+            inferred_topic = OWNER_CREW_TO_DEFAULT_TOPIC.get(normalized_owner_crew)  # type: ignore[arg-type]
+            if not inferred_topic:
+                raise ValueError(
+                    "topic is required when owner_crew cannot be mapped to a unique default topic."
+                )
+            normalized_topic = inferred_topic
+        if not normalized_owner_crew or not normalized_topic:
+            raise ValueError("owner_crew and topic must be provided, or one must uniquely infer the other.")
+        return normalized_owner_crew, normalized_topic
 
-    def _infer_origin_from_owner(self, owner_crew: CrewOwner, entry_origin: QuestionOrigin) -> QuestionOrigin:
+    def _build_entry_evidence_index(
+        self,
+        snapshot: EvidenceRegistrySnapshot,
+    ) -> dict[str, dict[str, list[str]]]:
         """
-        目的：让 entry 的来源字段尽量落到具体阶段，而不是停在模糊的 `discovered`。
-        功能：在 origin 仍是默认值时，根据 owner_crew 推断更具体的来源。
-        实现逻辑：按 crew 映射到对应来源枚举；若 origin 已被显式传入则原样保留。
-        可调参数：`owner_crew` 和 `entry_origin`。
-        默认参数及原因：只有在 origin 为 `discovered` 时才自动推断，原因是显式传值优先级更高。
+        目的：在工具层统一派生 entry 对 evidence 的关联视图。
+        功能：按 entry_id 汇总 support/conflict/context 三类 evidence ID。
+        实现逻辑：遍历 evidence 列表，再把 evidence_id 写到对应 entry 的三类桶中。
+        可调参数：`snapshot`。
+        默认参数及原因：entry 不再持久化 evidence 反向索引，原因是避免 registry JSON 冗余和重复维护。
         """
-        if entry_origin != "discovered":
-            return entry_origin
-        if owner_crew == "planning_crew":
-            return "planner"
-        if owner_crew == "valuation_crew":
-            return "valuation"
-        if owner_crew == "investment_thesis_crew":
-            return "thesis"
-        if owner_crew == "qa_crew":
-            return "qa"
-        return "research"
 
-    def _serialize_entry(self, entry: RegistryEntry) -> dict[str, object]:
+        evidence_index: dict[str, dict[str, list[str]]] = {}
+        for evidence in snapshot.evidence:
+            for entry_id in evidence.entry_ids:
+                linked = evidence_index.setdefault(
+                    entry_id,
+                    {
+                        "support": [],
+                        "conflict": [],
+                        "context": [],
+                    },
+                )
+                linked[evidence.stance].append(evidence.evidence_id)
+        return evidence_index
+
+    def _serialize_entry(
+        self,
+        entry: RegistryEntry,
+        evidence_links: dict[str, list[str]] | None = None,
+    ) -> dict[str, object]:
         """
         目的：把 RegistryEntry 的输出结构固定下来，避免不同读取模式各自拼字段。
         功能：把单条 entry 对象转成可直接写 JSON 的普通字典。
@@ -333,31 +355,31 @@ class _RegistryToolBase(BaseTool):
         可调参数：`entry`。
         默认参数及原因：默认输出完整核心字段，原因是 entry 详情通常需要一次看全。
         """
+        linked = evidence_links or {}
         return {
             "entry_id": entry.entry_id,
             "entry_type": entry.entry_type,
-            "title": entry.title,
-            "content": entry.content,
-            "entry_origin": entry.entry_origin,
+            "topic": entry.topic,
             "owner_crew": entry.owner_crew,
-            "target_pack": entry.target_pack,
             "priority": entry.priority,
-            "status": entry.status,
-            "conflict_severity": entry.conflict_severity,
-            "source_ref": entry.source_ref,
-            "gap_note": entry.gap_note,
-            "next_action": entry.next_action,
-            "last_updated_at": entry.last_updated_at,
-            "value": entry.value,
+            "title": entry.title,
+            "description": entry.description,
+            "content_type": entry.content_type,
+            "content": entry.content,
+            "columns": entry.columns,
             "unit": entry.unit,
             "period": entry.period,
-            "calibration_note": entry.calibration_note,
-            "parent_entry_id": entry.parent_entry_id,
-            "entry_level": entry.entry_level,
-            "evidence_needed": entry.evidence_needed,
-            "supporting_evidence_ids": entry.supporting_evidence_ids,
-            "conflicting_evidence_ids": entry.conflicting_evidence_ids,
-            "context_evidence_ids": entry.context_evidence_ids,
+            "source": entry.source,
+            "confidence": entry.confidence,
+            "status": entry.status,
+            "revision_detail": entry.revision_detail,
+            "creator": entry.creator,
+            "last_updated_at": entry.last_updated_at,
+            "evidence_counts": {
+                "support": len(linked.get("support", [])),
+                "conflict": len(linked.get("conflict", [])),
+                "context": len(linked.get("context", [])),
+            },
         }
 
     def _serialize_evidence(self, evidence) -> dict[str, object]:
@@ -384,17 +406,18 @@ class _RegistryToolBase(BaseTool):
     def _sort_entries(self, entries: list[RegistryEntry]) -> list[RegistryEntry]:
         """
         目的：让 entry 列表输出顺序稳定，减少 agent 和测试看到的随机抖动。
-        功能：按状态、优先级、pack 和 entry_id 对 entry 排序。
+        功能：按状态、优先级、责任 crew、topic 和 entry_id 对 entry 排序。
         实现逻辑：复用固定优先级字典构造排序键。
         可调参数：`entries`。
-        默认参数及原因：状态优先把最需要处理的 conflicted/gap/open 提前，原因是这最符合实际阅读顺序。
+        默认参数及原因：状态优先把最需要处理的 need_revision/unchecked 提前，原因是这最符合实际阅读顺序。
         """
         return sorted(
             entries,
             key=lambda entry: (
-                QUESTION_STATUS_PRIORITY.get(entry.status, 99),
-                QUESTION_PRIORITY_ORDER.get(entry.priority, 99),
-                entry.target_pack,
+                ENTRY_STATUS_PRIORITY.get(entry.status, 99),
+                ENTRY_PRIORITY_ORDER.get(entry.priority, 99),
+                entry.owner_crew,
+                entry.topic,
                 entry.entry_id,
             ),
         )
@@ -402,32 +425,81 @@ class _RegistryToolBase(BaseTool):
     def _filtered_entries(
         self,
         *,
-        include_statuses: list[QuestionStatus],
-        exclude_statuses: list[QuestionStatus],
-        target_pack: str,
+        include_statuses: list[RegistryEntryStatus],
+        exclude_statuses: list[RegistryEntryStatus],
+        owner_crew: str,
+        topic: str,
+        title_contains: str,
         filter_entry_type: RegistryEntryType | None,
+        has_supporting_evidence: bool | None,
+        has_conflicting_evidence: bool | None,
+        has_context_evidence: bool | None,
     ) -> list[RegistryEntry]:
         """
         目的：把 entry 过滤逻辑集中复用。
-        功能：按状态、pack 和类型返回筛选后的 entry 列表。
+        功能：按状态、owner、topic、标题和证据关联返回筛选后的 entry 列表。
         实现逻辑：先读取快照，再逐条应用过滤条件并排序。
-        可调参数：状态过滤、target_pack 和 entry 类型。
+        可调参数：各类过滤条件。
         默认参数及原因：默认返回全部 entry，原因是多数读取动作需要先看全量再决定下钻。
         """
 
         snapshot = self._load_snapshot()
+        evidence_index = self._build_entry_evidence_index(snapshot)
         include_status_set = set(include_statuses)
         exclude_status_set = set(exclude_statuses)
-        normalized_target_pack = target_pack.strip()
-        entries = [
-            entry
-            for entry in snapshot.entries
-            if (not include_status_set or entry.status in include_status_set)
-            and (not exclude_status_set or entry.status not in exclude_status_set)
-            and (not normalized_target_pack or entry.target_pack == normalized_target_pack)
-            and (filter_entry_type is None or entry.entry_type == filter_entry_type)
-        ]
+        normalized_owner_crew = owner_crew.strip()
+        normalized_topic = topic.strip()
+        keyword = title_contains.strip().lower()
+        entries = []
+        for entry in snapshot.entries:
+            if include_status_set and entry.status not in include_status_set:
+                continue
+            if exclude_status_set and entry.status in exclude_status_set:
+                continue
+            if normalized_owner_crew and entry.owner_crew != normalized_owner_crew:
+                continue
+            if normalized_topic and entry.topic != normalized_topic:
+                continue
+            if keyword and keyword not in entry.title.lower():
+                continue
+            if filter_entry_type is not None and entry.entry_type != filter_entry_type:
+                continue
+            entry_evidence = evidence_index.get(entry.entry_id, {})
+            if has_supporting_evidence is not None and bool(entry_evidence.get("support")) != has_supporting_evidence:
+                continue
+            if has_conflicting_evidence is not None and bool(entry_evidence.get("conflict")) != has_conflicting_evidence:
+                continue
+            if has_context_evidence is not None and bool(entry_evidence.get("context")) != has_context_evidence:
+                continue
+            entries.append(entry)
         return self._sort_entries(entries)
+
+    def _read_entry_list(self, entries: list[RegistryEntry]) -> str:
+        """
+        目的：给高频筛选场景提供轻量 entry 清单，避免一次塞入完整 Markdown。
+        功能：返回 entry_id、标题、状态、优先级、owner、topic 和置信度等轻量字段。
+        实现逻辑：先对 entries 排序，再压成紧凑 JSON。
+        可调参数：`entries`。
+        默认参数及原因：默认不带正文内容，原因是 manager 和 QA 常常只需要先定位条目再下钻。
+        """
+
+        payload_out = {
+            "entry_count": len(entries),
+            "entries": [
+                {
+                    "entry_id": entry.entry_id,
+                    "title": entry.title,
+                    "status": entry.status,
+                    "priority": entry.priority,
+                    "owner_crew": entry.owner_crew,
+                    "topic": entry.topic,
+                    "content_type": entry.content_type,
+                    "confidence": entry.confidence,
+                }
+                for entry in entries
+            ],
+        }
+        return json.dumps(payload_out, ensure_ascii=False, indent=2)
 
     def _read_full_snapshot(self) -> str:
         """
@@ -454,13 +526,14 @@ class _RegistryToolBase(BaseTool):
             raise ValueError("entry_ids is required when view=entry_detail.")
 
         snapshot = self._load_snapshot()
+        evidence_index = self._build_entry_evidence_index(snapshot)
         entry_id_set = set(entry_ids)
         payload_out = {
             "company_name": snapshot.company_name,
             "industry": snapshot.industry,
             "entry_count": len(entry_id_set),
             "entries": [
-                self._serialize_entry(entry)
+                self._serialize_entry(entry, evidence_index.get(entry.entry_id))
                 for entry in snapshot.entries
                 if entry.entry_id in entry_id_set
             ],
@@ -498,15 +571,15 @@ class AddEntryTool(_RegistryToolBase):
     """
     目的：给 agent 一个只能“追加新 entry”的工具，不允许顺手修改已有 entry。
     功能：把结构化输入转成 `RegistryEntry` 并安全追加到 registry。
-    实现逻辑：先根据 pack 自动推断 owner 和 origin，再调用统一 entry 追加逻辑。
-    可调参数：由 AddEntryInput 控制 entry 主键、类型、层级、归属和说明字段。
+    实现逻辑：先解析 owner/topic，再调用统一 entry 追加逻辑。
+    可调参数：由 AddEntryInput 控制 entry 主键、类型、归属和说明字段。
     默认参数及原因：工具名固定为 `add_entry`，原因是让 agent 一眼看出这是统一 entry 入口。
     """
 
     name: str = "add_entry"
     description: str = (
         "Append a newly discovered entry to the evidence registry. "
-        "Use this for facts, data, or judgments that do not already exist."
+        "Use this when the current template does not already contain the needed entry."
     )
     args_schema: type[BaseModel] = AddEntryInput
 
@@ -514,102 +587,142 @@ class AddEntryTool(_RegistryToolBase):
         self,
         entry_id: str,
         entry_type: RegistryEntryType = "judgment",
+        topic: str = "",
+        owner_crew: str = "",
+        priority: RegistryEntryPriority = "medium",
         title: str = "",
-        content: str = "",
-        target_pack: str = "",
-        evidence_needed: str = "",
-        parent_entry_id: str | None = None,
-        entry_level: QuestionLevel = "L2",
-        entry_origin: QuestionOrigin = "discovered",
-        owner_crew: CrewOwner = "research_crew",
-        priority: QuestionPriority = "medium",
-        status: QuestionStatus = "open",
-        source_ref: str = "",
-        gap_note: str = "",
-        next_action: str = "",
-        value: str = "",
+        description: str = "",
+        content_type: RegistryContentType = "single",
+        content: str | list[dict[str, str]] = "",
+        columns: list[str] | None = None,
         unit: str = "",
         period: str = "",
-        calibration_note: str = "",
+        source: str = "",
+        confidence: str = "",
+        status: RegistryEntryStatus = "unchecked",
+        revision_detail: str = "",
+        creator: str = "agent",
     ) -> str:
         """
         目的：把新增 entry 的写入动作收口在单一工具方法里。
         功能：把输入参数组装成 `RegistryEntry`，然后追加到 registry。
         实现逻辑：先按输入创建 entry 对象，再调用 `add_discovered_entry()` 落到账本。
-        可调参数：entry 类型、主键、标题、正文、层级、归属、优先级和补充说明。
-        默认参数及原因：默认来源是 `discovered`、状态是 `open`、优先级是 `medium`，原因是这最符合运行中发现新条目的常见场景。
+        可调参数：entry 类型、主键、标题、正文、归属、优先级和补充说明。
+        默认参数及原因：默认状态是 `unchecked`、优先级是 `medium`，原因是这最符合运行中发现新条目的常见场景。
         """
 
-        normalized_owner_crew = self._infer_owner_from_pack(target_pack, owner_crew)
-        normalized_entry_origin = self._infer_origin_from_owner(normalized_owner_crew, entry_origin)
+        normalized_owner_crew, normalized_topic = self._resolve_owner_and_topic(
+            owner_crew=owner_crew,
+            topic=topic,
+        )
         entry = RegistryEntry(
             entry_id=entry_id,
             entry_type=entry_type,
-            title=title,
-            content=content,
-            entry_origin=normalized_entry_origin,
-            owner_crew=normalized_owner_crew,
-            target_pack=target_pack,
+            topic=normalized_topic,  # type: ignore[arg-type]
+            owner_crew=normalized_owner_crew,  # type: ignore[arg-type]
             priority=priority,
-            status=status,
-            source_ref=source_ref,
-            gap_note=gap_note,
-            next_action=next_action,
-            value=value,
+            title=title,
+            description=description,
+            content_type=content_type,
+            content=content,
+            columns=columns or [],
             unit=unit,
             period=period,
-            calibration_note=calibration_note,
-            parent_entry_id=parent_entry_id,
-            entry_level=entry_level,
-            evidence_needed=evidence_needed,
+            source=source,
+            confidence=confidence,
+            status=status,
+            revision_detail=revision_detail,
+            creator=creator,
         )
         add_discovered_entry(self._require_registry_path(), entry)
         return json.dumps({"status": "ok", "entry_id": entry.entry_id}, ensure_ascii=False)
 
 
-class RegistrySeedTool(_RegistryToolBase):
+class UpdateEntryTool(_RegistryToolBase):
     """
-    目的：把 registry 启动动作变成单独工具，避免 planner 依赖外部隐式初始化。
-    功能：创建初始 registry，必要时跳过已有账本，并在成功后刷新当前上下文路径。
-    实现逻辑：先解析目标路径；已有文件且未强制重建时直接返回 skipped，否则创建新账本并刷新上下文。
-    可调参数：由 RegistrySeedInput 控制公司名、行业、目标路径和是否强制重建。
-    默认参数及原因：工具名固定为 `registry_seed`，原因是让 agent 明确知道这是初始化账本。
+    目的：给 agent 一个受控的“更新既有 entry”入口，避免模板条目长期停留在待补状态。
+    功能：更新已有 entry 的正文、表格、来源、状态和修订说明，但不允许静默删除条目。
+    实现逻辑：只回写显式传入的字段，并复用 registry 层的模型重建校验。
+    可调参数：由 UpdateEntryInput 控制具体要覆盖的字段。
+    默认参数及原因：工具名固定为 `update_entry`，原因是模板化工作流里这会是最常用的账本修改入口。
     """
 
-    name: str = "registry_seed"
+    name: str = "update_entry"
     description: str = (
-        "Initialize the evidence registry for a run. "
-        "By default it is idempotent and will skip if the target registry already exists."
+        "Update an existing evidence-registry entry. "
+        "Use this to fill seeded template entries with validated content, tables, sources, confidence, and status."
     )
-    args_schema: type[BaseModel] = RegistrySeedInput
+    args_schema: type[BaseModel] = UpdateEntryInput
 
     def _run(
         self,
-        company_name: str,
-        industry: str,
-        registry_path: str = "",
-        force_reset: bool = False,
+        entry_id: str,
+        entry_type: RegistryEntryType | None = None,
+        topic: str = "",
+        owner_crew: str = "",
+        priority: RegistryEntryPriority | None = None,
+        title: str = "",
+        description: str = "",
+        content_type: RegistryContentType | None = None,
+        content: str | list[dict[str, str]] | None = None,
+        columns: list[str] | None = None,
+        unit: str = "",
+        period: str = "",
+        source: str = "",
+        confidence: str = "",
+        status: RegistryEntryStatus | None = None,
+        revision_detail: str = "",
+        creator: str = "",
     ) -> str:
         """
-        目的：把 registry 初始化动作做成显式、可控的一次工具调用。
-        功能：创建新账本，或在已有账本存在时按规则跳过。
-        实现逻辑：先解析目标路径，再决定跳过还是创建，并同步刷新上下文。
-        可调参数：公司名、行业、目标路径和 `force_reset`。
-        默认参数及原因：默认不重建已有账本，原因是初始化动作应优先保证安全。
+        目的：把既有 entry 的局部更新动作收口到单一工具方法里。
+        功能：按需覆盖正文、表格、来源、置信度和状态等字段。
+        实现逻辑：只把显式传入的字段交给 `update_entry_fields()`；未传字段保持原值。
+        可调参数：各类可选更新字段。
+        默认参数及原因：默认只要求 `entry_id`，原因是模板化补值大多是局部更新。
         """
 
-        resolved_path = self._resolve_registry_path(registry_path)
-        path = Path(resolved_path)
-        if path.exists() and not force_reset:
-            set_evidence_registry_context(path.as_posix())
-            return json.dumps(
-                {"status": "skipped", "registry_path": path.as_posix(), "reason": "registry already exists"},
-                ensure_ascii=False,
+        updates: dict[str, object] = {}
+        if entry_type is not None:
+            updates["entry_type"] = entry_type
+        if topic:
+            updates["topic"] = topic
+        if title:
+            updates["title"] = title
+        if description:
+            updates["description"] = description
+        if content_type is not None:
+            updates["content_type"] = content_type
+        if content is not None:
+            updates["content"] = content
+        if columns is not None:
+            updates["columns"] = columns
+        if owner_crew or topic:
+            normalized_owner_crew, normalized_topic = self._resolve_owner_and_topic(
+                owner_crew=owner_crew,
+                topic=topic,
             )
+            updates["owner_crew"] = normalized_owner_crew
+            updates["topic"] = normalized_topic
+        if priority is not None:
+            updates["priority"] = priority
+        if unit:
+            updates["unit"] = unit
+        if period:
+            updates["period"] = period
+        if source:
+            updates["source"] = source
+        if confidence:
+            updates["confidence"] = confidence
+        if status is not None:
+            updates["status"] = status
+        if revision_detail:
+            updates["revision_detail"] = revision_detail
+        if creator:
+            updates["creator"] = creator
 
-        created_path = initialize_registry(company_name, industry, path)
-        set_evidence_registry_context(created_path)
-        return json.dumps({"status": "ok", "registry_path": created_path}, ensure_ascii=False)
+        update_entry_fields(self._require_registry_path(), entry_id, **updates)
+        return json.dumps({"status": "ok", "entry_id": entry_id}, ensure_ascii=False)
 
 
 class AddEvidenceTool(_RegistryToolBase):
@@ -636,7 +749,7 @@ class AddEvidenceTool(_RegistryToolBase):
         entry_ids: list[str],
         source_type: str = "agent_output",
         source_ref: str = "",
-        stance: EvidenceStance = "support",
+        stance: RegistryEvidenceStance = "support",
         note: str = "",
     ) -> str:
         """
@@ -664,7 +777,7 @@ class AddEvidenceTool(_RegistryToolBase):
 class StatusUpdateTool(_RegistryToolBase):
     """
     目的：把可修改范围限制在 entry 状态相关字段，避免 agent 修改核心事实。
-    功能：批量更新 entry 状态，并可附带 gap_note 与 next_action。
+    功能：批量更新 entry 状态，并可附带 revision_detail。
     实现逻辑：把输入直接交给 `update_entry_status()`，然后返回统一成功结果。
     可调参数：由 StatusUpdateInput 控制目标 entry 列表、状态和值班说明字段。
     默认参数及原因：工具名固定为 `status_update`，原因是明确传达该工具只负责状态推进。
@@ -673,31 +786,29 @@ class StatusUpdateTool(_RegistryToolBase):
     name: str = "status_update"
     description: str = (
         "Update the status of existing entries in the evidence registry. "
-        "This tool cannot delete entries or rewrite the core entry content."
+        "Use this for QA flags and revision routing, not for changing the core content."
     )
     args_schema: type[BaseModel] = StatusUpdateInput
 
     def _run(
         self,
         entry_ids: list[str],
-        status: QuestionStatus,
-        gap_note: str = "",
-        next_action: str = "",
+        status: RegistryEntryStatus,
+        revision_detail: str = "",
     ) -> str:
         """
         目的：把 entry 状态推进限定在一组受控字段上。
-        功能：批量更新 entry 状态，并可选补充缺口说明和下一步动作。
+        功能：批量更新 entry 状态，并可选补充修订说明。
         实现逻辑：把输入直接交给 `update_entry_status()`，然后返回统一成功结果。
-        可调参数：entry ID 列表、目标状态、`gap_note` 和 `next_action`。
-        默认参数及原因：`gap_note` 和 `next_action` 默认空字符串，原因是并不是每次状态变化都需要补充说明。
+        可调参数：entry ID 列表、目标状态和 `revision_detail`。
+        默认参数及原因：说明字段默认空字符串，原因是并不是每次状态变化都需要补充说明。
         """
 
         update_entry_status(
             self._require_registry_path(),
             entry_ids,
             status=status,
-            gap_note=gap_note,
-            next_action=next_action,
+            revision_detail=revision_detail,
         )
         return json.dumps({"status": "ok"}, ensure_ascii=False)
 
@@ -752,46 +863,67 @@ class RegistryReviewTool(_RegistryToolBase):
 class ReadRegistryTool(_RegistryToolBase):
     """
     目的：给需要看账本内容的 agent 提供统一只读入口。
-    功能：支持 Markdown、entry 详情、证据详情和完整快照几种视图。
-    实现逻辑：默认走 Markdown，需要细节时再按 ID 下钻。
-    可调参数：由 ReadRegistryInput 控制视图类型、状态过滤、pack 过滤和详情 ID 列表。
+    功能：支持 Markdown、entry_list、entry 详情、证据详情和完整快照几种视图。
+    实现逻辑：默认走 Markdown，需要轻量或细节时再切换视图。
+    可调参数：由 ReadRegistryInput 控制视图类型、过滤条件和详情 ID 列表。
     默认参数及原因：工具名固定为 `read_registry`，原因是让所有只读角色都用同一套稳定语义入口。
     """
 
     name: str = "read_registry"
     description: str = (
         "Read the evidence registry. "
-        "Use view=markdown for the grouped Markdown view, view=full for the complete JSON snapshot, "
-        "view=entry_detail for specific entries, and view=evidence_detail for specific evidence rows."
+        "Use view=markdown for the grouped Markdown view, view=entry_list for a lightweight filtered list, "
+        "view=full for the complete JSON snapshot, view=entry_detail for specific entries, and "
+        "view=evidence_detail for specific evidence rows."
     )
     args_schema: type[BaseModel] = ReadRegistryInput
 
     def _run(
         self,
         view: ReadRegistryView = "markdown",
-        include_statuses: list[QuestionStatus] | None = None,
-        exclude_statuses: list[QuestionStatus] | None = None,
-        target_pack: str = "",
+        include_statuses: list[RegistryEntryStatus] | None = None,
+        exclude_statuses: list[RegistryEntryStatus] | None = None,
+        owner_crew: str = "",
+        topic: str = "",
+        title_contains: str = "",
         filter_entry_type: RegistryEntryType | None = None,
+        has_supporting_evidence: bool | None = None,
+        has_conflicting_evidence: bool | None = None,
+        has_context_evidence: bool | None = None,
         entry_ids: list[str] | None = None,
         evidence_ids: list[str] | None = None,
     ) -> str:
         """
         目的：把 registry 的几种常见读取模式统一到同一个只读入口。
-        功能：根据 `view` 返回 Markdown、entry 列表、entry 详情、证据详情或完整快照。
+        功能：根据 `view` 返回 Markdown、轻量 entry_list、entry 详情、证据详情或完整快照。
         实现逻辑：先判断视图类型，再分别调用对应的读取帮助函数。
-        可调参数：`view`、状态过滤、目标 pack、类型过滤、entry ID 和证据 ID。
+        可调参数：`view`、过滤条件、entry ID 和证据 ID。
         默认参数及原因：默认 `view=markdown`，原因是新版 agent 更容易遵循 Markdown 账本视图。
         """
 
+        filtered_entries = self._filtered_entries(
+            include_statuses=include_statuses or [],
+            exclude_statuses=exclude_statuses or [],
+            owner_crew=owner_crew,
+            topic=topic,
+            title_contains=title_contains,
+            filter_entry_type=filter_entry_type,
+            has_supporting_evidence=has_supporting_evidence,
+            has_conflicting_evidence=has_conflicting_evidence,
+            has_context_evidence=has_context_evidence,
+        )
         if view == "markdown":
             return render_registry_markdown(
                 self._require_registry_path(),
-                target_pack=target_pack,
                 filter_entry_type=filter_entry_type,
                 include_statuses=include_statuses or [],
                 exclude_statuses=exclude_statuses or [],
+                owner_crew=owner_crew,
+                topic=topic,
+                title_contains=title_contains,
             )
+        if view == "entry_list":
+            return self._read_entry_list(filtered_entries)
         if view == "full":
             return self._read_full_snapshot()
         if view == "entry_detail":

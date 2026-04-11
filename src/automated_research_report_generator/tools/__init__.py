@@ -12,8 +12,8 @@ _TOOL_IMPORTS = {
     "AddEvidenceTool": ("automated_research_report_generator.tools.registry_tools", "AddEvidenceTool"),
     "ReadRegistryTool": ("automated_research_report_generator.tools.registry_tools", "ReadRegistryTool"),
     "RegistryReviewTool": ("automated_research_report_generator.tools.registry_tools", "RegistryReviewTool"),
-    "RegistrySeedTool": ("automated_research_report_generator.tools.registry_tools", "RegistrySeedTool"),
     "StatusUpdateTool": ("automated_research_report_generator.tools.registry_tools", "StatusUpdateTool"),
+    "UpdateEntryTool": ("automated_research_report_generator.tools.registry_tools", "UpdateEntryTool"),
     "set_evidence_registry_context": (
         "automated_research_report_generator.tools.registry_tools",
         "set_evidence_registry_context",

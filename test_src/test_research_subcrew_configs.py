@@ -19,7 +19,7 @@ from automated_research_report_generator.crews.peer_info_crew.peer_info_crew imp
 from automated_research_report_generator.crews.risk_crew.risk_crew import RiskCrew
 from automated_research_report_generator.flow.common import PROJECT_ROOT
 from automated_research_report_generator.flow.research_flow import ResearchReportFlow
-from automated_research_report_generator.flow.registry import initialize_registry
+from automated_research_report_generator.flow.registry import initialize_registry, load_registry_template
 
 
 def _research_subcrew_instances() -> list[object]:
@@ -82,41 +82,41 @@ def test_research_subcrew_can_build_runtime_crew_from_yaml_configs():
     assert len(runtime_crew.tasks) == 4
 
 
-def test_planning_seed_prompt_defines_pack_quota_and_id_rules():
+def test_research_registry_template_is_deterministic_and_covers_all_subcrews():
     """
-    目的：锁定 planning crew 的 registry seed prompt 已补齐分 pack 配额和 ID 规范。
-    功能：检查 `seed_registry_judgments` 描述中包含最关键的数量约束、财务覆盖项和命名规则。
-    实现逻辑：直接读取 planning crew 的 `tasks.yaml`，再断言关键提示词存在。
+    目的：锁住 research registry 已从 planner 输出切换为固定模板初始化。
+    功能：检查模板条目覆盖全部 7 个 research sub-crew，且不再出现 `planning_crew`。
+    实现逻辑：直接加载模板条目，再按 owner_crew 和条目 ID 做集合断言。
     可调参数：当前无。
-    默认参数及原因：默认只校验最关键的固定短语，原因是避免测试对整段提示词过度脆弱。
+    默认参数及原因：默认使用测试公司名和行业名，原因是模板里包含占位符替换逻辑。
     """
 
-    task_config_path = (
-        PROJECT_ROOT
-        / "src"
-        / "automated_research_report_generator"
-        / "crews"
-        / "planning_crew"
-        / "config"
-        / "tasks.yaml"
-    )
-    task_config = yaml.safe_load(task_config_path.read_text(encoding="utf-8"))
-    description = task_config["seed_registry_judgments"]["description"]
+    entries = load_registry_template("Test Co", "Automation")
+    owner_crews = {entry.owner_crew for entry in entries}
+    entry_ids = [entry.entry_id for entry in entries]
 
-    assert "history_background_pack: 3-5 fact + 2-3 judgment" in description
-    assert "finance_pack: 8-12 data + 3-5 judgment" in description
-    assert "收入/毛利率/EBITDA/净利润/FCF/负债率/利息覆盖/应收周转/存货周转" in description
-    assert "F_HIS_001" in description
-    assert 'value="待补"' in description
+    assert len(entry_ids) == len(set(entry_ids))
+    assert "planning_crew" not in owner_crews
+    assert {
+        "history_background_crew",
+        "industry_crew",
+        "business_crew",
+        "peer_info_crew",
+        "financial_crew",
+        "operating_metrics_crew",
+        "risk_crew",
+    }.issubset(owner_crews)
+    assert "D_OPS_001" in entry_ids
+    assert any("Test Co" in entry.title for entry in entries)
 
 
 def test_research_subcrew_synthesize_prompts_enforce_registry_backfill_rules():
     """
     目的：锁定 7 个 research sub-crew 的综合任务都带有统一的 registry 回填约束。
-    功能：检查每个 `synthesize_and_output` prompt 都要求检查 data 空位、遵守 ID 规则并避免重复建条。
+    功能：检查 `synthesize_and_output` prompt 要求按 owner_crew 读取、使用 `update_entry` 回填，并避免重复建条。
     实现逻辑：遍历 7 个 sub-crew 的 `tasks.yaml`，逐个断言关键提示词存在。
     可调参数：当前无。
-    默认参数及原因：默认只检验共用核心短语，原因是这些短语正是本次修复想稳定下来的行为边界。
+    默认参数及原因：默认只检验共用核心短语，原因是这些短语正是本次重构想稳定下来的行为边界。
     """
 
     for crew_instance in _research_subcrew_instances():
@@ -125,8 +125,9 @@ def test_research_subcrew_synthesize_prompts_enforce_registry_backfill_rules():
         task_config = yaml.safe_load(task_config_path.read_text(encoding="utf-8"))
         description = task_config["synthesize_and_output"]["description"]
 
-        assert 'filter_entry_type="data"' in description
-        assert '"待补"' in description
+        assert 'owner_crew="{owner_crew}"' in description
+        assert 'view="entry_detail"' in description
+        assert "update_entry" in description
         assert "F_HIS_001" in description
         assert "不得新建与已有 entry 内容重复的条目" in description
 
@@ -164,9 +165,9 @@ def test_writeup_compile_prompt_requires_full_verbatim_section_insertion():
 def test_research_subcrew_inputs_include_pack_metadata_and_upstream_pack_text(tmp_path):
     """
     目的：验证 flow 会把 crew YAML 占位符需要的输入补齐。
-    功能：检查 peer_info sub-crew 输入同时包含 pack 元信息和上游 pack 文本。
+    功能：检查 peer_info sub-crew 输入同时包含 pack 元信息、责任 crew 和上游 pack 文本。
     实现逻辑：构造最小 flow 状态与临时 pack 文件后，直接调用 `_research_subcrew_inputs()` 断言结果。
-    可调参数：`tmp_path` 用于隔离临时文件。
+    可调参数：`tmp_path`。
     默认参数及原因：默认选择 `peer_info_crew`，原因是它同时依赖 pack 元信息和两个上游 pack。
     """
 
@@ -176,8 +177,6 @@ def test_research_subcrew_inputs_include_pack_metadata_and_upstream_pack_text(tm
     flow.state.pdf_file_path = (tmp_path / "sample.pdf").as_posix()
     flow.state.page_index_file_path = (tmp_path / "page_index.json").as_posix()
     flow.state.document_metadata_file_path = (tmp_path / "document_metadata.md").as_posix()
-    flow.state.research_scope_path = (tmp_path / "research_scope.md").as_posix()
-    flow.state.question_tree_path = (tmp_path / "question_tree.md").as_posix()
     flow.state.run_cache_dir = (tmp_path / ".cache" / "test-run").as_posix()
     flow.state.run_output_dir = (tmp_path / ".cache" / "test-run").as_posix()
     flow.state.evidence_registry_path = (tmp_path / "registry.json").as_posix()
@@ -188,8 +187,6 @@ def test_research_subcrew_inputs_include_pack_metadata_and_upstream_pack_text(tm
         (flow.state.pdf_file_path, "pdf placeholder"),
         (flow.state.page_index_file_path, "{}"),
         (flow.state.document_metadata_file_path, "metadata"),
-        (flow.state.research_scope_path, "scope"),
-        (flow.state.question_tree_path, "question tree"),
         (flow.state.industry_pack_path, "industry pack body"),
         (flow.state.business_pack_path, "business pack body"),
     ]:
@@ -209,6 +206,7 @@ def test_research_subcrew_inputs_include_pack_metadata_and_upstream_pack_text(tm
 
     assert inputs["pack_title"] == "同行信息分析包"
     assert inputs["output_title"] == "同行信息分析包"
+    assert inputs["owner_crew"] == peer_info_crew.crew_name
     assert inputs["search_guidance"] == peer_info_crew.search_guidance
     assert inputs["extract_guidance"] == peer_info_crew.extract_guidance
     assert inputs["qa_guidance"] == peer_info_crew.qa_guidance

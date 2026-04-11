@@ -7,7 +7,11 @@ from types import SimpleNamespace
 import automated_research_report_generator.flow.research_flow as research_flow_module
 from automated_research_report_generator.flow.document_metadata import PdfDocumentMetadataPayload
 from automated_research_report_generator.flow.models import GateReviewOutput
-from automated_research_report_generator.flow.registry import initialize_registry
+from automated_research_report_generator.flow.registry import (
+    initialize_registry,
+    load_registry,
+    load_registry_template,
+)
 from automated_research_report_generator.flow.research_flow import (
     RESEARCH_GATE_FORCE_PASS_EVENT,
     RESEARCH_GATE_RETRY_EVENT,
@@ -33,8 +37,6 @@ def _build_flow(tmp_path) -> ResearchReportFlow:
     flow.state.pdf_file_path = (tmp_path / "sample.pdf").as_posix()
     flow.state.page_index_file_path = (tmp_path / "page_index.json").as_posix()
     flow.state.document_metadata_file_path = (tmp_path / "document_metadata.md").as_posix()
-    flow.state.research_scope_path = (tmp_path / "research_scope.md").as_posix()
-    flow.state.question_tree_path = (tmp_path / "question_tree.md").as_posix()
     flow.state.run_cache_dir = (tmp_path / ".cache" / "test-run").as_posix()
     flow.state.run_output_dir = (tmp_path / ".cache" / "test-run").as_posix()
     flow.state.final_report_markdown_path = (tmp_path / ".cache" / "test-run" / "report.md").as_posix()
@@ -42,8 +44,6 @@ def _build_flow(tmp_path) -> ResearchReportFlow:
     Path(flow.state.pdf_file_path).write_text("pdf placeholder", encoding="utf-8")
     Path(flow.state.page_index_file_path).write_text("{}", encoding="utf-8")
     Path(flow.state.document_metadata_file_path).write_text("metadata", encoding="utf-8")
-    Path(flow.state.research_scope_path).write_text("scope", encoding="utf-8")
-    Path(flow.state.question_tree_path).write_text("questions", encoding="utf-8")
     registry_path = tmp_path / "registry.json"
     initialize_registry("Test Co", "Automation", registry_path)
     flow.state.evidence_registry_path = registry_path.as_posix()
@@ -171,6 +171,47 @@ def test_prepare_evidence_generates_document_metadata_directly_in_run_indexing(t
     assert captured_manifest["document_metadata_file_path"] == run_metadata_path.as_posix()
 
 
+def test_build_research_plan_reinitializes_registry_from_deterministic_template(tmp_path, monkeypatch):
+    """
+    目的：验证 `build_research_plan()` 已切到固定模板初始化，而不是 planner 动态出题。
+    功能：检查 registry 会按模板重建，并把条目数和 owner 分布写入 checkpoint。
+    实现逻辑：构造最小 flow，替换日志和 checkpoint 落盘后执行 `build_research_plan()`，再回读 registry 断言。
+    可调参数：`tmp_path` 和 `monkeypatch`。
+    默认参数及原因：默认直接使用真实模板加载函数，原因是这个测试要锁住模板驱动的真实行为。
+    """
+
+    flow = _build_flow(tmp_path)
+    captured_checkpoint: dict[str, object] = {}
+
+    def fake_write_checkpoint(checkpoint_code: str, payload: dict[str, object]) -> str:
+        """
+        目的：拦截 checkpoint 输出，避免测试写入额外文件。
+        功能：记录 `build_research_plan()` 写出的关键字段，供测试断言。
+        实现逻辑：把 payload 写入外层字典，再返回一个占位路径。
+        可调参数：`checkpoint_code` 和 `payload`。
+        默认参数及原因：默认只记录最近一次 planning checkpoint，原因是本测试只关注 `cp01_planned`。
+        """
+
+        captured_checkpoint["code"] = checkpoint_code
+        captured_checkpoint["payload"] = payload
+        return "checkpoint.json"
+
+    monkeypatch.setattr(flow, "_log_flow", lambda message: "flow.log")
+    monkeypatch.setattr(flow, "_write_checkpoint", fake_write_checkpoint)
+
+    result = flow.build_research_plan()
+
+    template_entries = load_registry_template("Test Co", "Automation")
+    snapshot = load_registry(flow.state.evidence_registry_path)
+
+    assert result == flow.state.evidence_registry_path
+    assert len(snapshot.entries) == len(template_entries)
+    assert captured_checkpoint["code"] == "cp01_planned"
+    assert captured_checkpoint["payload"]["entry_count"] == len(template_entries)
+    assert captured_checkpoint["payload"]["owner_distribution"]["industry_crew"] > 0
+    assert "planning_crew" not in captured_checkpoint["payload"]["owner_distribution"]
+
+
 def test_run_research_stage_runs_all_subcrews_then_targeted_rerun_only_updates_affected_pack(tmp_path, monkeypatch):
     """
     目的：验证 research 阶段首轮会跑 7 个子 crew，而返工只会定向重跑受影响 pack。
@@ -204,34 +245,28 @@ def test_run_research_stage_runs_all_subcrews_then_targeted_rerun_only_updates_a
     fake_specs = [
         {
             "pack_name": "history_background_pack",
-            "legacy_pack_name": "history_governance_pack",
             "crew_name": "history_background_crew",
             "crew_cls": FakeSubCrew,
             "output_file_name": "01_history_background_pack.md",
             "state_attr": "history_background_pack_path",
-            "legacy_state_attr": "history_governance_pack_path",
             "title": "历史与背景分析包",
             "checkpoint_code": "cp02a_history_background_pack",
         },
         {
             "pack_name": "industry_pack",
-            "legacy_pack_name": "",
             "crew_name": "industry_crew",
             "crew_cls": FakeSubCrew,
             "output_file_name": "02_industry_pack.md",
             "state_attr": "industry_pack_path",
-            "legacy_state_attr": "",
             "title": "行业分析包",
             "checkpoint_code": "cp02b_industry_pack",
         },
         {
             "pack_name": "business_pack",
-            "legacy_pack_name": "",
             "crew_name": "business_crew",
             "crew_cls": FakeSubCrew,
             "output_file_name": "03_business_pack.md",
             "state_attr": "business_pack_path",
-            "legacy_state_attr": "",
             "title": "业务分析包",
             "checkpoint_code": "cp02c_business_pack",
         },
@@ -262,7 +297,6 @@ def test_run_research_stage_runs_all_subcrews_then_targeted_rerun_only_updates_a
     assert captured_runs[3]["pack_output_path"] == f"{iter_02_dir}/03_business_pack.md"
     assert captured_runs[3]["qa_feedback"] == "补客户结构缺口"
     assert flow.state.history_background_pack_path == f"{iter_01_dir}/01_history_background_pack.md"
-    assert flow.state.history_governance_pack_path == f"{iter_01_dir}/01_history_background_pack.md"
     assert flow.state.industry_pack_path == f"{iter_01_dir}/02_industry_pack.md"
     assert flow.state.business_pack_path == f"{iter_02_dir}/03_business_pack.md"
 

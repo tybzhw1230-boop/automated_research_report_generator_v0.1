@@ -2,7 +2,7 @@ from __future__ import annotations
 
 # 设计目的：统一管理预处理、研究、估值、投资论点、质检和成文流程。
 # 模块功能：预处理 PDF、顺序调度六类任务组、按 QA 结果路由，并维护全程状态。
-# 实现逻辑：先准备证据底座，再依次执行 planning、research、valuation、thesis、QA 和 writeup。
+# 实现逻辑：先准备证据底座，再依次执行模板初始化、research、valuation、thesis、QA 和 writeup。
 # 可调参数：三类阶段的自动返工上限、各阶段输入拼接方式和 gate 路由标签。
 # 默认参数及原因：三个阶段默认各允许 1 次自动返工，原因是总运行次数固定为 2 次。
 
@@ -35,13 +35,12 @@ from automated_research_report_generator.crews.operating_metrics_crew.operating_
     OperatingMetricsCrew,
 )
 from automated_research_report_generator.crews.peer_info_crew.peer_info_crew import PeerInfoCrew
-from automated_research_report_generator.crews.planning_crew.planning_crew import PlanningCrew
 from automated_research_report_generator.crews.qa_crew.qa_crew import QACrew
 from automated_research_report_generator.crews.risk_crew.risk_crew import RiskCrew
 from automated_research_report_generator.crews.valuation_crew.valuation_crew import ValuationCrew
 from automated_research_report_generator.crews.writeup_crew.writeup_crew import WriteupCrew
 from automated_research_report_generator.flow.document_metadata import resolve_pdf_document_metadata_payload
-from automated_research_report_generator.flow.models import GateReviewOutput, RegistrySeedPlan, ResearchFlowState
+from automated_research_report_generator.flow.models import GateReviewOutput, ResearchFlowState
 from automated_research_report_generator.flow.pdf_indexing import (
     ensure_pdf_page_index,
     reset_pdf_preprocessing_runtime_state,
@@ -51,9 +50,10 @@ from automated_research_report_generator.flow.registry import (
     build_registry_diff_summary,
     entry_ids_for_packs,
     initialize_registry,
+    initialize_registry_from_template,
+    load_registry_template,
     render_registry_markdown,
     register_evidence,
-    replace_registry_entries,
     save_registry_snapshot,
 )
 from automated_research_report_generator.tools import set_evidence_registry_context
@@ -78,78 +78,64 @@ STAGE_LABELS = {
 RESEARCH_SUB_CREW_SPECS = [
     {
         "pack_name": "history_background_pack",
-        "legacy_pack_name": "history_governance_pack",
         "crew_name": "history_background_crew",
         "crew_cls": HistoryBackgroundCrew,
         "output_file_name": "01_history_background_pack.md",
         "state_attr": "history_background_pack_path",
-        "legacy_state_attr": "history_governance_pack_path",
         "title": "历史与背景分析包",
         "checkpoint_code": "cp02a_history_background_pack",
     },
     {
         "pack_name": "industry_pack",
-        "legacy_pack_name": "",
         "crew_name": "industry_crew",
         "crew_cls": IndustryCrew,
         "output_file_name": "02_industry_pack.md",
         "state_attr": "industry_pack_path",
-        "legacy_state_attr": "",
         "title": "行业分析包",
         "checkpoint_code": "cp02b_industry_pack",
     },
     {
         "pack_name": "business_pack",
-        "legacy_pack_name": "",
         "crew_name": "business_crew",
         "crew_cls": BusinessCrew,
         "output_file_name": "03_business_pack.md",
         "state_attr": "business_pack_path",
-        "legacy_state_attr": "",
         "title": "业务分析包",
         "checkpoint_code": "cp02c_business_pack",
     },
     {
         "pack_name": "peer_info_pack",
-        "legacy_pack_name": "",
         "crew_name": "peer_info_crew",
         "crew_cls": PeerInfoCrew,
         "output_file_name": "04_peer_info_pack.md",
         "state_attr": "peer_info_pack_path",
-        "legacy_state_attr": "",
         "title": "同行信息分析包",
         "checkpoint_code": "cp02d_peer_info_pack",
     },
     {
         "pack_name": "finance_pack",
-        "legacy_pack_name": "",
         "crew_name": "financial_crew",
         "crew_cls": FinancialCrew,
         "output_file_name": "05_finance_pack.md",
         "state_attr": "finance_pack_path",
-        "legacy_state_attr": "",
         "title": "财务分析包",
         "checkpoint_code": "cp02e_finance_pack",
     },
     {
         "pack_name": "operating_metrics_pack",
-        "legacy_pack_name": "",
         "crew_name": "operating_metrics_crew",
         "crew_cls": OperatingMetricsCrew,
         "output_file_name": "06_operating_metrics_pack.md",
         "state_attr": "operating_metrics_pack_path",
-        "legacy_state_attr": "",
         "title": "运营指标分析包",
         "checkpoint_code": "cp02f_operating_metrics_pack",
     },
     {
         "pack_name": "risk_pack",
-        "legacy_pack_name": "",
         "crew_name": "risk_crew",
         "crew_cls": RiskCrew,
         "output_file_name": "07_risk_pack.md",
         "state_attr": "risk_pack_path",
-        "legacy_state_attr": "",
         "title": "风险分析包",
         "checkpoint_code": "cp02g_risk_pack",
     },
@@ -158,9 +144,9 @@ RESEARCH_SUB_CREW_SPECS = [
 
 class ResearchReportFlow(Flow[ResearchFlowState]):
     """
-    目的：把 PDF 预处理、规划、7 个 research sub-crew、估值、投资主线和成文串成一条稳定主流程。
+    目的：把 PDF 预处理、模板初始化、7 个 research sub-crew、估值、投资主线和成文串成一条稳定主流程。
     功能：管理阶段执行顺序、research 外部 QA 重跑、运行状态落盘和最终产物输出。
-    实现逻辑：先准备证据底座，再依次执行 planning、research、research gate、valuation、thesis、writeup。
+    实现逻辑：先准备证据底座，再依次执行模板初始化、research、research gate、valuation、thesis、writeup。
     可调参数：`max_research_loops`、阶段输入拼接方式和输出路径。
     默认参数及原因：research 阶段默认允许 1 次自动返工，原因是总运行次数固定为 2 次。
     """
@@ -242,49 +228,43 @@ class ResearchReportFlow(Flow[ResearchFlowState]):
     @listen(prepare_evidence)
     def build_research_plan(self):
         """
-        目的：在正式研究前先产出统一的研究计划。
-        功能：运行 planning crew，生成研究范围、问题树和证据地图初稿。
-        实现逻辑：创建 `planning` 输出目录，注入基础输入后执行 crew，再把产物路径写回 state。
-        可调参数：planning 输出目录和 planning 阶段可见的基础输入字段。
-        默认参数及原因：规划产物默认写入 `planning` 目录，原因是方便与后续阶段隔离。
+        目的：在正式研究前先用固定模板初始化 research registry。
+        功能：加载 YAML 模板、完成占位符替换并把结果写回 registry。
+        实现逻辑：直接读取模板并覆盖当前 registry，不再调用 planning crew 或生成额外 planning 产物。
+        可调参数：模板文件路径和模板中 entry 的条目定义。
+        默认参数及原因：默认使用仓库内固定模板，原因是当前 planning 已切换到确定性初始化。
         """
 
-        planning_dir = ensure_directory(Path(self.state.run_cache_dir) / "planning")
-        self._log_flow(f"build_research_plan started | planning_output_dir={planning_dir.as_posix()}")
-        inputs = self._planning_inputs() | {"planning_output_dir": planning_dir.as_posix()}
-        self._prepare_tool_context()
-        planning_crew = self._configure_crew_log(PlanningCrew(), self._crew_log_path("planning_crew"))
-        result = planning_crew.crew().kickoff(inputs=inputs)
-        self.state.research_scope_path = (planning_dir / "01_research_scope.md").as_posix()
-        self.state.question_tree_path = (planning_dir / "02_question_tree.md").as_posix()
-        self.state.evidence_map_seed_path = (planning_dir / "03_evidence_map_seed.md").as_posix()
-        registry_seed_output = result.tasks_output[2] if len(result.tasks_output) > 2 else None
-        registry_seed_payload = (
-            registry_seed_output.json_dict
-            if registry_seed_output and registry_seed_output.json_dict is not None
-            else registry_seed_output.pydantic if registry_seed_output else None
+        self._log_flow("build_research_plan started | mode=deterministic_template")
+        template_entries = load_registry_template(
+            self.state.company_name,
+            self.state.industry,
         )
-        registry_seed_plan = self._coerce_registry_seed(registry_seed_payload)
-        replaced_entry_ids = replace_registry_entries(
+        initialize_registry_from_template(
+            self.state.company_name,
+            self.state.industry,
+            template_entries,
             self.state.evidence_registry_path,
-            registry_seed_plan,
         )
         self._log_flow(
             "build_research_plan completed | "
-            f"research_scope_path={self.state.research_scope_path} | "
-            f"question_tree_path={self.state.question_tree_path} | "
-            f"replaced_entry_count={len(replaced_entry_ids)}"
+            f"entry_count={len(template_entries)} | "
+            f"registry_path={self.state.evidence_registry_path}"
         )
         self._write_checkpoint(
             "cp01_planned",
             {
-                "research_scope_path": self.state.research_scope_path,
-                "question_tree_path": self.state.question_tree_path,
-                "evidence_map_seed_path": self.state.evidence_map_seed_path,
-                "replaced_entry_count": len(replaced_entry_ids),
+                "registry_path": self.state.evidence_registry_path,
+                "entry_count": len(template_entries),
+                "owner_distribution": {
+                    spec["crew_name"]: len(
+                        [entry for entry in template_entries if entry.owner_crew == spec["crew_name"]]
+                    )
+                    for spec in RESEARCH_SUB_CREW_SPECS
+                },
             },
         )
-        return self.state.question_tree_path
+        return self.state.evidence_registry_path
 
     @router(build_research_plan)
     def run_research_crew(self):
@@ -346,7 +326,6 @@ class ResearchReportFlow(Flow[ResearchFlowState]):
         entry_ids = entry_ids_for_packs(
             self.state.evidence_registry_path,
             affected_packs,
-            entry_types=["judgment"],
         )
         apply_gate_review(
             self.state.evidence_registry_path,
@@ -420,7 +399,6 @@ class ResearchReportFlow(Flow[ResearchFlowState]):
         inputs = self._base_inputs() | {
             "thesis_output_dir": thesis_dir.as_posix(),
             "history_background_pack_text": self._read(self.state.history_background_pack_path),
-            "history_governance_pack_text": self._read(self.state.history_governance_pack_path),
             "industry_pack_text": self._read(self.state.industry_pack_path),
             "business_pack_text": self._read(self.state.business_pack_path),
             "peer_info_pack_text": self._read(self.state.peer_info_pack_path),
@@ -477,9 +455,7 @@ class ResearchReportFlow(Flow[ResearchFlowState]):
 
         self._log_flow("publish_if_passed started")
         inputs = self._base_inputs() | {
-            "research_scope_text": self._read(self.state.research_scope_path),
             "history_background_pack_text": self._read(self.state.history_background_pack_path),
-            "history_governance_pack_text": self._read(self.state.history_governance_pack_path),
             "industry_pack_text": self._read(self.state.industry_pack_path),
             "business_pack_text": self._read(self.state.business_pack_path),
             "peer_info_pack_text": self._read(self.state.peer_info_pack_path),
@@ -521,30 +497,10 @@ class ResearchReportFlow(Flow[ResearchFlowState]):
         """
         目的：集中维护各阶段共享输入。
         功能：从 state 和已落盘文件组装公共上下文。
-        实现逻辑：读取基础路径、公司信息和规划产物后统一返回。
+        实现逻辑：读取基础路径、公司信息和文档摘要后统一返回。
         可调参数：基础输入字段集合。
         默认参数及原因：优先使用 state，原因是避免阶段之间重复推断。
         """
-        return {
-            "company_name": self.state.company_name,
-            "industry": self.state.industry,
-            "pdf_file_path": self.state.pdf_file_path,
-            "page_index_file_path": self.state.page_index_file_path,
-            "document_metadata_file_path": self.state.document_metadata_file_path,
-            "document_profile_summary": self._read(self.state.document_metadata_file_path),
-            "question_tree_text": self._read(self.state.question_tree_path),
-            "research_scope_text": self._read(self.state.research_scope_path),
-        }
-
-    def _planning_inputs(self) -> dict[str, str]:
-        """
-        目的：为 planning 阶段提供最小且真实的输入。
-        功能：只暴露 planning 已经依赖的 PDF 和元数据上下文。
-        实现逻辑：从 `prepare_evidence()` 已完成的状态里挑选可用字段，不读取尚未生成的规划产物。
-        可调参数：planning 阶段可见的基础字段集合。
-        默认参数及原因：默认不包含 planning 自身输出，原因是这些文件要等执行后才生成。
-        """
-
         return {
             "company_name": self.state.company_name,
             "industry": self.state.industry,
@@ -753,6 +709,7 @@ class ResearchReportFlow(Flow[ResearchFlowState]):
 
         inputs = self._base_inputs() | {
             "pack_name": pack_name,
+            "owner_crew": getattr(crew_instance, "crew_name", ""),
             "pack_title": getattr(crew_instance, "pack_title", pack_title),
             "pack_focus": getattr(crew_instance, "pack_focus", ""),
             "output_title": getattr(crew_instance, "output_title", pack_title),
@@ -812,11 +769,7 @@ class ResearchReportFlow(Flow[ResearchFlowState]):
                 )
             )
             setattr(self.state, spec["state_attr"], output_path)
-            if spec["legacy_state_attr"]:
-                setattr(self.state, spec["legacy_state_attr"], output_path)
             self._register_pack_output(output_path, pack_name, spec["title"])
-            if spec["legacy_pack_name"]:
-                self._register_pack_output(output_path, spec["legacy_pack_name"], spec["title"])
             self._write_checkpoint(
                 spec["checkpoint_code"],
                 {
@@ -1033,21 +986,6 @@ class ResearchReportFlow(Flow[ResearchFlowState]):
             "research": "qa_research",
         }
         return self._crew_log_path(mapping.get(stage_name, "qa_research"))
-
-    def _coerce_registry_seed(self, payload) -> RegistrySeedPlan:
-        """
-        目的：把 planning 输出统一转换成 `RegistrySeedPlan`。
-        功能：兼容模型对象、普通字典和空值三种输入。
-        实现逻辑：优先直接返回或校验已有结果，空值时返回空 seed。
-        可调参数：`payload`。
-        默认参数及原因：空值默认返回空 entries，原因是 planning 异常时不应直接打断整条 Flow。
-        """
-
-        if isinstance(payload, RegistrySeedPlan):
-            return payload
-        if payload:
-            return RegistrySeedPlan.model_validate(payload)
-        return RegistrySeedPlan(summary="missing planning registry seed output", entries=[])
 
     def _coerce_gate_result(self, payload) -> GateReviewOutput:
         """

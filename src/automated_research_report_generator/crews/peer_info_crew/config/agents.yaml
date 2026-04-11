@@ -22,7 +22,7 @@ qa_check_agent:
   goal: >
     检查 {pack_title} 的 registry 是否已被正确更新，并指出仍未关闭的缺口。
   backstory: >
-    你不负责新增正文内容，只负责检查覆盖度、补 gap_note、补 next_action，并留下 review 记录。
+    你不负责新增正文内容，只负责检查覆盖度、补 revision_detail，并留下 review 记录。
 
 synthesizing_agent:
   role: >

@@ -1,117 +1,181 @@
 # Automated Research Report Generator v0.2
 
-一个基于 CrewAI Flow 的买方研究报告生成项目。当前仓库已经完成从旧版单包结构到 `v0.2` Flow 架构的迁移，核心特征是：
+一个基于 CrewAI Flow 的买方研究报告生成项目。当前仓库的真实主线已经切到 `v0.2` 的 registry-centric 结构：planning 不再依赖单独的 planning crew，而是用固定 YAML 模板初始化 research registry；7 个 research sub-crews 围绕统一 registry 工作；只有 research 阶段保留外部 QA gate。
 
-- 稳定包路径：`src/automated_research_report_generator/`
-- 多阶段 Flow：预处理、规划、7 个 research sub-crews、估值、投资主线、成文
-- 证据注册表：每次 run 都会生成 `evidence_registry.json` 和 `registry_snapshot.md`
-- Research QA Gate：只在 research 阶段做外部 QA；最多自动运行 2 次（含初始运行），第二次仍未通过则直接 `force pass`
-- Valuation 内部 QA：`valuation_crew` 使用 Hierarchical Process，由 manager 在 crew 内协调校验
-- 分组件日志与检查点：`flow`、各个 sub-crew、QA 和 checkpoint 分别落盘，方便排查
-
-## 当前状态
+## 当前实现边界
 
 - 当前项目版本：`0.2.0`
-- 当前 CrewAI 版本：`1.14.0`
+- 当前 CrewAI 依赖：`crewai[file-processing,google-genai,litellm,tools]==1.14.0`
 - 当前项目类型：`[tool.crewai].type = "flow"`
 - 当前主入口：`src/automated_research_report_generator/main.py`
 - 当前主 Flow：`src/automated_research_report_generator/flow/research_flow.py`
-- 当前 GitHub 远端仓库名仍是 `automated_research_report_generator_v0.1`
-- `pdf/` 目录当前允许跟踪到 Git
-- `.env`、`.venv/`、`.cache/`、`crewai_memory/` 和本地临时目录仍然视为本地运行目录
+- 当前包路径：`src/automated_research_report_generator/`
+- 当前默认模型供应商：OpenRouter
+- 当前远端仓库名仍是 `automated_research_report_generator_v0.1`
+
+## 当前设计原则
+
+- planning 只做确定性初始化：`build_research_plan` 直接加载 `flow/config/registry_template.yaml`，不再生成独立 planning 产物。
+- registry 是研究主接口：research、valuation、thesis、QA 都围绕 `evidence_registry.json` 协作。
+- research-only QA：外部 gate 只保留在 research 阶段；valuation 和 thesis 不再经过外部 gate。
+- 运行目录按 run 隔离：单次运行统一写入 `.cache/<run_slug>/`，方便排查单轮产物、日志和快照。
 
 ## 当前 Flow 链路
 
 1. `prepare_evidence`
    - 识别 PDF 元数据
-   - 生成逐页主题索引
-   - 初始化 evidence registry
+   - 在当前 run 下生成页索引
+   - 初始化 evidence registry 与 run 目录
 2. `build_research_plan`
-   - 生成 `research_scope`
-   - 生成 `question_tree`
-   - 生成 `evidence_map_seed`
+   - 加载固定 `registry_template.yaml`
+   - 替换 `{company_name}` 与 `{industry}` 占位符
+   - 用模板重建当前 run 的 research registry
 3. `run_research_crew`
    - 顺序执行 7 个 research sub-crews
-   - 输出 `history_background`、`industry`、`business`、`peer_info`、`finance`、`operating_metrics`、`risk` 七个 pack
+   - 产出 `history_background`、`industry`、`business`、`peer_info`、`finance`、`operating_metrics`、`risk` 七个 pack
 4. `review_research_gate`
-   - 只做跨 pack 一致性与覆盖度 QA
-   - 如果失败，只定向重跑受影响的 pack
+   - 对 research 阶段做覆盖度和跨 pack 一致性复核
+   - 如失败，只定向重跑 `affected_packs`
 5. `run_valuation_crew`
-   - 输出 `peers_pack`、`intrinsic_value_pack` 和 `valuation_pack`
-   - 不再走外部 valuation QA gate
+   - 产出 `peers_pack`、`intrinsic_value_pack`、`valuation_pack`
+   - 不再经过外部 valuation gate
 6. `run_investment_thesis_crew`
-   - 输出投资主线和尽调问题
-   - 不再走外部 thesis QA gate
+   - 产出 `investment_thesis` 和 `diligence_questions`
+   - 可读取完整 registry 快照，但不经过外部 thesis gate
 7. `publish_if_passed`
-   - 生成最终 Markdown 和 PDF
+   - 汇总上游 pack
+   - 生成最终 Markdown 与 PDF
 
-## QA Gate 与自动放行
+## 当前 Crew 结构
 
-- 只有 `research` 阶段保留外部 QA gate
-- `review_research_gate` 只检查跨 pack 一致性、覆盖度和未关闭缺口
-- Research QA 最多自动运行 `2` 次（含初始运行）
-- 第二次运行后如果 QA 仍未通过，会直接自动 `force pass`
-- `valuation_crew` 在 crew 内部完成自校验，不再走外部 gate
-- `run_investment_thesis_crew` 直接进入成文阶段，不再走外部 gate
+当前 `crews/` 下只保留这几类目录：
 
-## 运行产物
+- 7 个 research sub-crews
+  - `history_background_crew`
+  - `industry_crew`
+  - `business_crew`
+  - `peer_info_crew`
+  - `financial_crew`
+  - `operating_metrics_crew`
+  - `risk_crew`
+- 3 个后续阶段 crews
+  - `valuation_crew`
+  - `investment_thesis_crew`
+  - `writeup_crew`
+- 1 个外部 QA crew
+  - `qa_crew`
 
-单次 run 的主要产物路径如下：
+当前不再有 `planning_crew`，也不再保留共享 `research_subcrew_base.py` 这类中间抽象。
 
-- 运行根目录：`.cache/<run_slug>/`
-- 中间产物目录：`.cache/<run_slug>/md/`
-- 运行日志目录：`.cache/<run_slug>/logs/`
-- 证据注册表：`.cache/<run_slug>/md/registry/evidence_registry.json`
-- Registry Markdown 快照：`.cache/<run_slug>/md/registry/registry_snapshot.md`
-- Registry 历史快照：`.cache/<run_slug>/md/registry/snapshots/`
-- Checkpoints：`.cache/<run_slug>/md/checkpoints/cpXX_*.json`
-- 运行索引：`.cache/<run_slug>/md/run_manifest.json`
-- 最终 Markdown：`.cache/<run_slug>/md/<pdf_stem>_v2_report.md`
-- 最终 PDF：`.cache/<run_slug>/md/<pdf_stem>_v2_report.pdf`
+## 当前 Registry 契约
 
-## 日志结构
+当前 registry 文件位于：
 
-当前日志已经按 run 维度归档，并在 run 目录内继续按 `flow`、`preprocess` 和各个 `crew` 拆分。
+- `.cache/<run_slug>/md/registry/evidence_registry.json`
+- `.cache/<run_slug>/md/registry/registry_snapshot.md`
 
-单次 run 日志：
+当前 entry 模型只保留现行字段体系：
 
-- `.cache/<run_slug>/logs/preprocess.txt`
-- `.cache/<run_slug>/logs/flow.txt`
-- `.cache/<run_slug>/logs/planning_crew.txt`
-- `.cache/<run_slug>/logs/history_background_crew.txt`
-- `.cache/<run_slug>/logs/industry_crew.txt`
-- `.cache/<run_slug>/logs/business_crew.txt`
-- `.cache/<run_slug>/logs/peer_info_crew.txt`
-- `.cache/<run_slug>/logs/financial_crew.txt`
-- `.cache/<run_slug>/logs/operating_metrics_crew.txt`
-- `.cache/<run_slug>/logs/risk_crew.txt`
-- `.cache/<run_slug>/logs/qa_research.txt`
-- `.cache/<run_slug>/logs/valuation_crew.txt`
-- `.cache/<run_slug>/logs/investment_thesis_crew.txt`
-- `.cache/<run_slug>/logs/writeup_crew.txt`
+- `entry_type`: `fact` / `data` / `judgment`
+- `content_type`: `single` / `table`
+- `status`: `unchecked` / `checked` / `need_revision`
+- `topic`: 按 `history`、`industry`、`business`、`peer_info`、`financial`、`operating_metrics`、`risk`、`peers`、`intrinsic_value`、`valuation`、`investment_thesis` 分组
+- `owner_crew`: 指向当前真实 crew 名
+
+当前稳定工具接口位于 `src/automated_research_report_generator/tools/`：
+
+- `add_entry`
+- `update_entry`
+- `add_evidence`
+- `status_update`
+- `registry_review`
+- `read_registry`
+
+## 已移除的旧接口
+
+下面这些旧接口已经不属于当前实现，不应再作为项目说明或 prompt 依赖展示：
+
+- 独立 `planning_crew`
+- `research_scope`
+- `question_tree`
+- `seed_evidence_map`
+- `RegistrySeedPlan`
+- `RegistrySeedTool`
+- 旧 registry 状态语义：`open`、`in_progress`、`supported`、`gap`、`conflicted`、`deferred`、`closed`
+- 项目级 `latest_run.json`
+
+## 运行产物与目录结构
+
+单次 run 的真实目录结构如下：
+
+```text
+.cache/<run_slug>/
+├─ indexing/
+│  ├─ <pdf_stem>_document_metadata.json
+│  └─ <pdf_stem>_page_index.json
+├─ logs/
+│  ├─ preprocess.txt
+│  ├─ flow.txt
+│  ├─ history_background_crew.txt
+│  ├─ industry_crew.txt
+│  ├─ business_crew.txt
+│  ├─ peer_info_crew.txt
+│  ├─ financial_crew.txt
+│  ├─ operating_metrics_crew.txt
+│  ├─ risk_crew.txt
+│  ├─ qa_research.txt
+│  ├─ valuation_crew.txt
+│  ├─ investment_thesis_crew.txt
+│  └─ writeup_crew.txt
+└─ md/
+   ├─ research/
+   │  └─ iter_01/
+   ├─ valuation/
+   │  └─ iter_01/
+   ├─ thesis/
+   │  └─ iter_01/
+   ├─ qa/
+   │  └─ research/
+   │     └─ iter_01/
+   ├─ registry/
+   │  ├─ evidence_registry.json
+   │  ├─ registry_snapshot.md
+   │  └─ snapshots/
+   ├─ checkpoints/
+   ├─ run_manifest.json
+   ├─ <pdf_stem>_v2_report.md
+   └─ <pdf_stem>_v2_report.pdf
+```
 
 说明：
 
-- 不再保留 `latest_run.json` 这类项目级 latest 索引
-- `run_manifest.json` 跟本次 run 的中间产物一起落在 `md/` 目录
-- `flow` 日志记录阶段推进、路由和 gate 状态
-- `crew` 日志记录各 crew 自身输出
-- 预处理阶段的 PDF 页面索引日志写入同一次 run 的 `preprocess.txt`
+- 当前正式运行主路径是 `.cache/<run_slug>/`，不是仓库根目录的 `output/`
+- `run_manifest.json` 写在 `md/` 目录
+- research、valuation、thesis 和 QA 都按 `iter_XX` 保留阶段版本
+- `latest_run.json` 已经移除，不再维护项目级最新索引
 
-## 项目目录
+## 仓库目录
 
 ```text
 .
 ├─ AGENTS.md
 ├─ PROJECT_HANDOFF.md
+├─ README.md
 ├─ design_docs/
 ├─ pdf/
-├─ output/
 ├─ src/
 │  └─ automated_research_report_generator/
 │     ├─ main.py
 │     ├─ llm_config.py
 │     ├─ flow/
+│     │  ├─ common.py
+│     │  ├─ document_metadata.py
+│     │  ├─ models.py
+│     │  ├─ pdf_indexing.py
+│     │  ├─ registry.py
+│     │  ├─ research_flow.py
+│     │  └─ config/
+│     │     └─ registry_template.yaml
 │     ├─ crews/
 │     └─ tools/
 └─ test_src/
@@ -121,7 +185,7 @@
 
 - Python `>=3.10,<3.14`
 - 建议使用 `uv`
-- 当前代码默认在 Windows 环境下开发和验证
+- 当前主要在 Windows 环境下开发和验证
 
 ## 环境变量
 
@@ -132,16 +196,16 @@
 通常需要：
 
 - `SERPER_API_KEY`
-  - 多个 research sub-crews 使用 `SerperDevTool` 做公开资料搜索
+  - 多个 research sub-crews 使用公开资料搜索工具
 
 按场景需要：
 
 - `TUSHARE_TOKEN`
   - A 股估值工具 `TushareValuationDataTool` 需要
 - `PDF_INDEX_MAX_CONCURRENCY`
-  - 覆盖 PDF 页面索引最大并发，当前默认值为 `100`
+  - 覆盖 PDF 页面索引最大并发，默认 `100`
 - `PDF_INDEX_RETRY_LIMIT`
-  - 覆盖页面索引失败重试次数，当前默认值为 `2`
+  - 覆盖页面索引失败重试次数，默认 `2`
 
 ## 安装
 
@@ -151,7 +215,7 @@
 uv sync
 ```
 
-如果只想用 `pip`：
+如果只想使用 `pip`：
 
 ```bash
 pip install -r requirements.txt
@@ -177,31 +241,39 @@ uv run python -m automated_research_report_generator.main --pdf <PDF路径>
 uv run python -m automated_research_report_generator.main --plot
 ```
 
-## 编码约束
-
-- 仓库里的 Python、YAML、Markdown、TOML、JSON 等文本文件统一使用 `UTF-8` 且不带 BOM
-- Windows 环境下不要依赖编辑器、终端或脚本的系统默认编码，尤其不要把中文文件按 ANSI、GBK 或其他本地代码页重新保存
-- 当前仓库已经提供 [.editorconfig](./.editorconfig) 约束常见文本文件编码
-- 如果你怀疑又出现了中文乱码，可以先运行下面的编码检查：
-
-```bash
-uv run pytest test_src/test_text_file_encoding.py -q
-```
-
 ## 测试
 
 - 测试文件统一放在 `test_src/`
-- 当前仓库已经有 flow、registry、tools、Tushare、PDF indexing 相关测试文件
-- 当前锁定环境没有把 `pytest` 作为默认依赖写进 `pyproject.toml`
+- 当前已有 flow、registry、tools、Tushare、PDF indexing 和结构约束测试
+- `pytest` 当前没有作为默认依赖写入 `pyproject.toml`
 
-如果你要运行测试，请先保证环境里有 `pytest`，然后执行：
+运行测试：
 
 ```bash
 uv run pytest test_src
 ```
 
-## 说明
+如果只想检查文本编码：
 
-- 默认 PDF 路径来自 `src/automated_research_report_generator/flow/common.py` 中的 `DEFAULT_PDF_PATH`
-- 当前 LLM 入口统一放在 `src/automated_research_report_generator/llm_config.py`
-- 当前项目的主模型供应商是 OpenRouter，不再使用 README 里常见的 `OPENAI_API_KEY` 约定
+```bash
+uv run pytest test_src/test_text_file_encoding.py -q
+```
+
+## 文档导航
+
+- 当前项目描述：`README.md`
+- 当前续接说明：`PROJECT_HANDOFF.md`
+- 当前结构链路说明：`design_docs/项目信息传递链路全面分析.md`
+- 当前 crew 结构说明：`design_docs/CREW_REFACTOR_WORKING_DRAFT.md`
+- 近期下一步设计方向：`design_docs/next_step_20260410.md`
+
+## 近期设计方向
+
+近期已经明确但尚未完全落地的方向主要集中在 thesis 阶段：
+
+- 提炼当前市场一致预期
+- 识别基本面与估值相对市场预期的预期差
+- 明确能够收敛预期差的催化剂
+- 将 thesis 进一步收敛到更明确的多空辩论式框架
+
+这些内容目前属于路线图，不应误认为已经是当前接口或当前输出结构。
