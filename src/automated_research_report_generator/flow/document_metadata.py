@@ -28,10 +28,10 @@ from automated_research_report_generator.tools.pdf_page_tools import compute_pdf
 
 DOCUMENT_METADATA_AGENT_ROLE = "PDF 文档基础信息识别专员"
 DOCUMENT_METADATA_AGENT_GOAL = (
-    "读取 PDF 的关键页面，识别该文档对应的公司名称和所属行业，供主流程自动补充输入参数。"
+    "读取 PDF 的关键页面，识别该文档对应的公司名称、所属行业和报告期间，供主流程自动补充输入参数。"
 )
 DOCUMENT_METADATA_AGENT_BACKSTORY = (
-    "你专门负责在 PDF 的封面、目录、业务介绍和公司概览等关键页面中识别公司名称和行业。"
+    "你专门负责在 PDF 的封面、目录、业务介绍、公司概览和财务报表等关键页面中识别公司名称、行业和报告期间。"
     "你不做长篇分析，只输出最核心的结构化基础信息。"
 )
 DOCUMENT_METADATA_AGENT_TEMPERATURE = 0.1
@@ -50,7 +50,12 @@ DOCUMENT_METADATA_PROMPT_RULES = (
     "输出必须严格符合给定结构。",
     "company_name 使用公司标准名称。",
     "industry 使用尽量简洁的行业名称。",
-    f"如果材料里无法明确判断，就返回“{DOCUMENT_METADATA_UNKNOWN_COMPANY}”或“{DOCUMENT_METADATA_UNKNOWN_INDUSTRY}”。",
+    "报告期间识别规则：从财务数据、审计报告、封面日期等线索中提取。"
+    "period_1/2/3 是报告期覆盖的三个完整会计年度（如 '2021'、'2022'、'2023'）。"
+    "period_4 是最近一季的上一年可比期间（如 '2024H1'），period_5 是最近一季（如 '2025H1'）。"
+    "如果文档只覆盖年度报告没有季度数据，period_4 和 period_5 留空。"
+    "如果无法判断某个期间，该字段留空字符串。",
+    f"如果材料里无法明确判断公司或行业，就返回“{DOCUMENT_METADATA_UNKNOWN_COMPANY}”或“{DOCUMENT_METADATA_UNKNOWN_INDUSTRY}”。",
     "不要输出解释、前后缀、Markdown 代码块或额外文本。",
 )
 
@@ -58,7 +63,7 @@ DOCUMENT_METADATA_PROMPT_RULES = (
 class PdfDocumentMetadata(BaseModel):
     """
     设计目的：定义 metadata 识别任务的结构化返回格式。
-    模块功能：保存公司名和行业名两个核心字段。
+    模块功能：保存公司名、行业名和报告期间。
     实现逻辑：按当前定义的输入、处理和返回顺序执行，直接复用本函数或类里已经写好的步骤。
     可调参数：字段值由模型输出填写。
     默认参数及原因：无默认业务值，原因是识别结果必须来自当前 PDF。
@@ -66,6 +71,11 @@ class PdfDocumentMetadata(BaseModel):
 
     company_name: str = Field(..., description="PDF 对应公司的标准名称")
     industry: str = Field(..., description="PDF 对应公司的所属行业")
+    period_1: str = Field("", description="报告期第1年，如 '2021'")
+    period_2: str = Field("", description="报告期第2年，如 '2022'")
+    period_3: str = Field("", description="报告期第3年，如 '2023'")
+    period_4: str = Field("", description="报告期最近一季的上一年可比期间，如 '2024H1'")
+    period_5: str = Field("", description="报告期最近一季，如 '2025H1'")
 
 
 class PdfDocumentMetadataPayload(BaseModel):
@@ -83,6 +93,19 @@ class PdfDocumentMetadataPayload(BaseModel):
     company_name: str
     industry: str
     source_pages: list[int]
+    periods: dict[str, str] = Field(
+        default_factory=lambda: {
+            "{期间1}": "",
+            "{期间2}": "",
+            "{期间3}": "",
+            "{期间4}": "",
+            "{期间5}": "",
+            "{预测期1}": "",
+            "{预测期2}": "",
+            "{预测期3}": "",
+        },
+        description="报告期间占位符到实际期间的映射，如 {'{期间1}': '2021', '{期间3}': '2023'}",
+    )
 
 
 def _normalize_metadata_value(value: str, fallback: str) -> str:
@@ -98,18 +121,18 @@ def _normalize_metadata_value(value: str, fallback: str) -> str:
     return normalized or fallback
 
 
-def _extract_metadata_from_raw(raw: str) -> tuple[str, str]:
+def _extract_metadata_from_raw(raw: str) -> tuple[str, str, dict[str, str]]:
     """
     设计目的：兼容模型没有正确返回 `pydantic` 结果时的兜底解析。
-    模块功能：从原始文本里尝试解析 JSON，并提取公司名和行业名。
+    模块功能：从原始文本里尝试解析 JSON，并提取公司名、行业名和报告期间。
     实现逻辑：按当前定义的输入、处理和返回顺序执行，直接复用本函数或类里已经写好的步骤。
     可调参数：`raw`。
-    默认参数及原因：解析失败返回空串对，原因是后续还有统一回退逻辑接手。
+    默认参数及原因：解析失败返回空串和空字典，原因是后续还有统一回退逻辑接手。
     """
 
     cleaned = (raw or "").strip()
     if not cleaned:
-        return "", ""
+        return "", "", {}
 
     if cleaned.startswith("```"):
         cleaned = cleaned.strip("`").strip()
@@ -119,12 +142,17 @@ def _extract_metadata_from_raw(raw: str) -> tuple[str, str]:
     try:
         data = json.loads(cleaned)
     except Exception:
-        return "", ""
+        return "", "", {}
 
     if not isinstance(data, dict):
-        return "", ""
+        return "", "", {}
 
-    return str(data.get("company_name", "") or ""), str(data.get("industry", "") or "")
+    periods = {}
+    for i in range(1, 6):
+        val = str(data.get(f"period_{i}", "") or "").strip()
+        if val:
+            periods[f"{{期间{i}}}"] = val
+    return str(data.get("company_name", "") or ""), str(data.get("industry", "") or ""), periods
 
 
 def build_document_metadata_task_prompt(sampled_pages: list[tuple[int, str]]) -> str:
@@ -200,15 +228,23 @@ def summarize_document_metadata(
 
     prompt = build_document_metadata_task_prompt(sampled_pages)
 
+    periods: dict[str, str] = {}
     try:
         result = agent.kickoff(prompt, response_format=PdfDocumentMetadata)
         company_name = ""
         industry = ""
         if getattr(result, "pydantic", None):
-            company_name = str(result.pydantic.company_name or "")
-            industry = str(result.pydantic.industry or "")
+            pyd = result.pydantic
+            company_name = str(pyd.company_name or "")
+            industry = str(pyd.industry or "")
+            for i in range(1, 6):
+                val = str(getattr(pyd, f"period_{i}", "") or "").strip()
+                if val:
+                    periods[f"{{期间{i}}}"] = val
         if not company_name or not industry:
-            company_name, industry = _extract_metadata_from_raw(getattr(result, "raw", "") or "")
+            company_name, industry, fallback_periods = _extract_metadata_from_raw(getattr(result, "raw", "") or "")
+            if not periods:
+                periods = fallback_periods
     except Exception as exc:
         _logger.warning(
             "Document metadata extraction failed, falling back to filename. pdf=%s error=%s",
@@ -226,6 +262,7 @@ def summarize_document_metadata(
         company_name=_normalize_metadata_value(company_name, pdf_path.stem or DOCUMENT_METADATA_UNKNOWN_COMPANY),
         industry=_normalize_metadata_value(industry, DOCUMENT_METADATA_UNKNOWN_INDUSTRY),
         source_pages=[page_number for page_number, _ in sampled_pages],
+        periods=periods,
     )
 
 

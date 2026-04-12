@@ -198,7 +198,12 @@ class ResearchReportFlow(Flow[ResearchFlowState]):
 
         page_index_path = ensure_pdf_page_index(str(pdf_path), company_name=metadata_payload.company_name)
         set_pdf_context(str(pdf_path), page_index_path)
-        initialize_registry(metadata_payload.company_name, metadata_payload.industry, registry_path)
+        initialize_registry(
+            metadata_payload.company_name,
+            metadata_payload.industry,
+            registry_path,
+            periods=metadata_payload.periods,
+        )
         set_evidence_registry_context(registry_path.as_posix())
 
         self.state.company_name = metadata_payload.company_name

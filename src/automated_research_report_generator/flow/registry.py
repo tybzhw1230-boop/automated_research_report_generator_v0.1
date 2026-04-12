@@ -103,34 +103,53 @@ def load_registry_template(
     company_name: str,
     industry: str,
     template_path: str | Path | None = None,
+    periods: dict[str, str] | None = None,
 ) -> list[RegistryEntry]:
     """
     目的：把固定 YAML 模板加载成可直接落盘的 registry entries。
-    功能：读取模板、做占位符替换、校验唯一性，并返回结构化 entry 列表。
-    实现逻辑：先加载 YAML，再逐条做字符串插值和模型校验。
-    可调参数：公司名、行业名和可选模板路径。
+    功能：读取模板、做占位符替换（公司名、行业、期间）、校验唯一性，并返回结构化 entry 列表。
+    实现逻辑：先加载 YAML，再逐条做字符串插值和模型校验。columns 列表中的期间占位符也会被替换。
+    可调参数：公司名、行业名、可选模板路径和期间映射。
     默认参数及原因：模板路径默认使用仓库内固定文件，原因是当前重构目标是确定性初始化。
     """
 
     resolved_template_path = Path(template_path or _default_template_path()).expanduser().resolve()
     raw_text = resolved_template_path.read_text(encoding="utf-8")
-    raw_entries = yaml.safe_load(raw_text) or []
-    if not isinstance(raw_entries, list):
-        raise ValueError("registry_template.yaml 的顶层结构必须是列表。")
+    raw_document = yaml.safe_load(raw_text) or {}
 
-    entry_ids: set[str] = set()
-    entries: list[RegistryEntry] = []
+    # 兼容旧格式（顶层是列表）和新格式（顶层是字典，entries 在 document.entries 下）
+    if isinstance(raw_document, list):
+        raw_entries = raw_document
+    elif isinstance(raw_document, dict):
+        raw_entries = raw_document.get("entries", [])
+    else:
+        raise ValueError("registry_template.yaml 的顶层结构必须是列表或字典。")
+
+    # 构建占位符替换映射
     format_values = {
         "company_name": company_name,
         "industry": industry,
     }
+    period_map: dict[str, str] = periods or {}
+
+    def _replace_periods(text: str) -> str:
+        """替换字符串中的期间占位符。"""
+        for placeholder, actual in period_map.items():
+            if actual:
+                text = text.replace(placeholder, actual)
+        return text
+
+    entry_ids: set[str] = set()
+    entries: list[RegistryEntry] = []
     for item in raw_entries:
         if not isinstance(item, dict):
             raise ValueError("registry_template.yaml 中的每个条目都必须是字典。")
         payload = dict(item)
         for key in ("title", "description", "content"):
             if isinstance(payload.get(key), str):
-                payload[key] = payload[key].format(**format_values)
+                payload[key] = _replace_periods(payload[key].format(**format_values))
+        if isinstance(payload.get("columns"), list):
+            payload["columns"] = [_replace_periods(col) for col in payload["columns"]]
         entry = RegistryEntry.model_validate(payload)
         if entry.entry_id in entry_ids:
             raise ValueError(f"registry 模板中存在重复 entry_id: {entry.entry_id}")
@@ -257,7 +276,7 @@ def _render_entry_block(entry: RegistryEntry, evidence_links: dict[str, list[str
     else:
         lines.extend(
             [
-                f"- 内容：{entry.content or '待补'}",
+                f"- 内容：{entry.content or '-'}",
                 f"- 单位：{entry.unit or '-'}",
                 f"- 期间：{entry.period or '-'}",
             ]
@@ -447,16 +466,17 @@ def initialize_registry(
     registry_path: str | Path,
     *,
     template_path: str | Path | None = None,
+    periods: dict[str, str] | None = None,
 ) -> str:
     """
     目的：为 Flow 初始化一份干净的 evidence registry。
     功能：加载固定模板并把模板条目落盘到 registry。
     实现逻辑：先读取模板，再调用统一的模板初始化函数。
-    可调参数：公司名、行业名、registry 路径和可选模板路径。
+    可调参数：公司名、行业名、registry 路径、可选模板路径和期间映射。
     默认参数及原因：默认使用仓库内模板文件，原因是当前 planning 已改为确定性初始化。
     """
 
-    entries = load_registry_template(company_name, industry, template_path=template_path)
+    entries = load_registry_template(company_name, industry, template_path=template_path, periods=periods)
     return initialize_registry_from_template(company_name, industry, entries, registry_path)
 
 

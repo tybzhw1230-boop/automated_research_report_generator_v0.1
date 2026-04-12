@@ -37,7 +37,8 @@ def J(topic, crew, priority, title, desc, **kw):
     e.update(kw)
     return e
 
-TS   = ["指标", "2022", "2023", "2024", "最新期间", "单位", "来源"]
+PERIODS = ["{期间1}", "{期间2}", "{期间3}", "{期间4}", "{期间5}"]
+TS   = ["指标"] + PERIODS + ["单位", "来源"]
 LIST = ["项目", "详情", "来源"]
 COMP = ["公司", "指标值", "来源"]
 
@@ -168,7 +169,7 @@ for t, d, p in [
 
 entries.append(D(H, HC, "high", "{company_name} 关联交易汇总",
     "关联采购、关联销售金额及占比。",
-    ["关联方", "交易类型", "2022", "2023", "2024", "占比", "来源"]))
+    ["关联方", "交易类型", *PERIODS, "占比", "来源"]))
 
 # 1.9 治理判断
 for t, d, p in [
@@ -401,15 +402,15 @@ for t, d, p in [
 
 entries.append(D(B, BC, "high", "{company_name} 收入区域分布",
     "按国内外及主要区域的收入分布。",
-    ["区域", "2022", "2023", "2024", "占比", "来源"]))
+    ["区域", *PERIODS, "占比", "来源"]))
 entries.append(D(B, BC, "high", "{company_name} 收入按销售模式",
     "按直销/经销/线上等模式的收入分布。",
-    ["模式", "2022", "2023", "2024", "占比", "毛利率", "来源"]))
+    ["模式", *PERIODS, "占比", "毛利率", "来源"]))
 
 # 客户分析（细化）
 entries.append(D(B, BC, "high", "{company_name} 前五大客户",
     "前五大客户名称、销售额及占比。",
-    ["客户", "2022", "2023", "2024", "占比", "类型", "来源"]))
+    ["客户", *PERIODS, "占比", "类型", "来源"]))
 entries.append(D(B, BC, "medium", "{company_name} 前十大客户",
     "前十大客户名称、销售额及占比。",
     ["客户", "2024销售额", "占比", "合作年限", "来源"]))
@@ -468,7 +469,7 @@ for t, d, p in [
 
 entries.append(D(B, BC, "medium", "{company_name} 出口收入按区域",
     "各出口市场的收入及占比。",
-    ["区域/国家", "2022", "2023", "2024", "占比", "来源"]))
+    ["区域/国家", *PERIODS, "占比", "来源"]))
 
 # 3.4 采购与供应链（大幅扩展）
 for t, d, p in [
@@ -479,10 +480,10 @@ for t, d, p in [
 
 entries.append(D(B, BC, "high", "{company_name} 主要原材料采购",
     "主要原材料名称、采购额、占比及价格趋势。",
-    ["原材料", "2022", "2023", "2024", "占采购比", "价格趋势", "来源"]))
+    ["原材料", *PERIODS, "占采购比", "价格趋势", "来源"]))
 entries.append(D(B, BC, "high", "{company_name} 前五大供应商",
     "前五大供应商名称、采购额及占比。",
-    ["供应商", "2022", "2023", "2024", "占比", "来源"]))
+    ["供应商", *PERIODS, "占比", "来源"]))
 entries.append(D(B, BC, "medium", "{company_name} 前十大供应商",
     "前十大供应商覆盖的采购占比。",
     ["供应商", "2024采购额", "占比", "来源"]))
@@ -740,7 +741,7 @@ for t, d, p in [
 
 entries.append(D(FN, FC, "medium", "{company_name} 收入季度分布",
     "各季度收入金额及占比。",
-    ["季度", "2022", "2023", "2024", "占比", "来源"]))
+    ["季度", *PERIODS, "占比", "来源"]))
 
 # 成本分析
 for t, d, p in [
@@ -756,7 +757,7 @@ for t, d, p in [
 ]: entries.append(F(FN, FC, p, t, d))
 
 entries.append(D(FN, FC, "high", "{company_name} 成本构成明细", "成本结构。",
-    ["成本项", "2022", "2023", "2024", "占比", "来源"]))
+    ["成本项", *PERIODS, "占比", "来源"]))
 
 # 费用分析（按类别细化）
 for fee_type in ["销售费用", "管理费用", "研发费用", "财务费用"]:
@@ -830,7 +831,7 @@ entries.append(D(FN, FC, "medium", "{company_name} 应收账款账龄",
     ["账龄", "金额", "占比", "坏账准备", "来源"]))
 entries.append(D(FN, FC, "medium", "{company_name} 存货构成明细",
     "存货按原材料/在产品/产成品构成。",
-    ["类别", "2022", "2023", "2024", "占比", "来源"]))
+    ["类别", *PERIODS, "占比", "来源"]))
 
 # 5.3 现金流量
 entries.append(D(FN, FC, "high", "{company_name} 现金流量表摘要",
@@ -921,10 +922,10 @@ for t, d in [
 # 5.9 盈利预测
 entries.append(D(FN, FC, "high", "{company_name} 盈利预测假设",
     "收入增速、毛利率、费用率等核心预测假设。",
-    ["假设项", "2024A", "2025E", "2026E", "2027E", "依据", "来源"]))
+    ["假设项", "{期间3}A", "{预测期1}E", "{预测期2}E", "{预测期3}E", "依据", "来源"]))
 entries.append(D(FN, FC, "high", "{company_name} 盈利预测结果",
     "预测的收入、EBITDA、净利润、EPS。",
-    ["指标", "2024A", "2025E", "2026E", "2027E", "单位", "来源"]))
+    ["指标", "{期间3}A", "{预测期1}E", "{预测期2}E", "{预测期3}E", "单位", "来源"]))
 entries.append(D(FN, FC, "medium", "{company_name} 敏感性分析",
     "关键假设变化对利润的敏感性。",
     ["假设变量", "乐观", "基准", "悲观", "来源"]))
@@ -1150,6 +1151,377 @@ for t, d, p in [
 
 
 # ══════════════════════════════════════════════
+# 8. SUPPLEMENTARY ENTRIES - 补充条目以达到1000+
+# ══════════════════════════════════════════════
+
+# ---- 8.1 Business: 按行业类型的通用细分维度 ----
+
+# 销售收入真实性核查（买方视角）
+for t, d, p in [
+    ("{company_name} 收入与运费匹配性", "销售收入与运费的勾稽关系是否匹配。", "medium"),
+    ("{company_name} 收入与产量匹配性", "收入变化与产量变化是否匹配。", "medium"),
+    ("{company_name} 收入与库存变化匹配性", "收入与库存增减的勾稽关系。", "medium"),
+    ("{company_name} 收入与预收款匹配性", "预收账款/合同负债与收入变化的匹配。", "medium"),
+    ("{company_name} 收入与现金回款匹配性", "销售回款与收入确认的匹配关系。", "high"),
+    ("{company_name} 收入增长是否依赖关联方", "关联交易收入占比是否在上升。", "high"),
+    ("{company_name} 新增客户贡献的收入", "新客户贡献收入占比及可持续性。", "medium"),
+    ("{company_name} 老客户收入增速", "存量客户的收入同比变化。", "medium"),
+]: entries.append(F(B, BC, p, t, d))
+
+# 采购成本真实性
+for t, d, p in [
+    ("{company_name} 采购与产量匹配性", "原材料采购量与产品产量的匹配关系。", "medium"),
+    ("{company_name} 采购与存货变动匹配性", "采购金额与存货变动的勾稽。", "medium"),
+    ("{company_name} 采购与应付账款匹配性", "采购与应付账款变动的匹配。", "medium"),
+    ("{company_name} 采购价格与市场价对比", "主要原材料采购价与市场价的对比。", "medium"),
+    ("{company_name} 采购退货情况", "是否存在大规模采购退货及原因。", "low"),
+]: entries.append(F(B, BC, p, t, d))
+
+# 各业务线/产品线更细颗粒度（补充5条×6维度=30条）
+for dim in ["产品F", "产品G", "产品H", "产品I", "产品J"]:
+    for t, d, p in [
+        (f"{{company_name}} {dim}收入与毛利", f"{dim}的收入金额、增速及毛利率。", "medium"),
+        (f"{{company_name}} {dim}客户结构", f"{dim}的客户类型及集中度。", "medium"),
+        (f"{{company_name}} {dim}竞争格局", f"{dim}所在细分市场的竞争格局。", "medium"),
+        (f"{{company_name}} {dim}增长预期", f"{dim}的未来增长潜力及驱动因素。", "medium"),
+        (f"{{company_name}} {dim}生命周期", f"{dim}处于哪个生命周期阶段。", "low"),
+        (f"{{company_name}} {dim}替代风险", f"{dim}面临的技术/产品替代风险。", "low"),
+    ]: entries.append(F(B, BC, p, t, d))
+
+# 客户维度细化
+for i in range(1, 11):
+    entries.append(F(B, BC, "medium",
+        f"{{company_name}} 第{i}大客户画像",
+        f"第{i}大客户的行业、规模、合作历史及未来合作预期。"))
+
+# 供应商维度细化
+for i in range(1, 6):
+    entries.append(F(B, BC, "medium",
+        f"{{company_name}} 第{i}大供应商画像",
+        f"第{i}大供应商的行业地位、供应能力及替代可能性。"))
+
+# 区域维度细化
+for region in ["华东", "华南", "华北", "华中", "西南", "西北", "东北", "海外-北美", "海外-欧洲", "海外-东南亚", "海外-其他"]:
+    entries.append(F(B, BC, "low",
+        f"{{company_name}} {region}区域市场分析",
+        f"{region}区域的收入占比、增速及竞争格局。"))
+
+# ---- 8.2 Financial: 更多细分财务指标 ----
+
+# 各季度利润率波动
+for q in ["Q1", "Q2", "Q3", "Q4"]:
+    entries.append(D(FN, FC, "low",
+        f"{{company_name}} {q}财务指标",
+        f"第{q}的收入、毛利率、净利率等指标。", TS))
+
+# 月度运营数据（如公司披露）
+for m in ["1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月"]:
+    entries.append(D(FN, FC, "low",
+        f"{{company_name}} {m}收入数据",
+        f"{m}的收入金额（如公司披露月度数据）。", TS))
+
+# 各子公司财务贡献
+for i in range(1, 6):
+    entries.append(D(FN, FC, "medium",
+        f"{{company_name}} 子公司{i}财务摘要",
+        f"第{i}号主要子公司的收入、净利润贡献。", TS))
+
+# 对外投资详情
+for t, d, p in [
+    ("{company_name} 长期股权投资明细", "各长期股权投资的对象、金额及收益。", "medium"),
+    ("{company_name} 交易性金融资产", "交易性金融资产的构成及收益。", "low"),
+    ("{company_name} 委托理财情况", "委托理财金额、收益率及风险。", "low"),
+    ("{company_name} 衍生品使用情况", "是否使用衍生品对冲及品种规模。", "low"),
+    ("{company_name} 对外担保明细", "对外担保对象、金额及风险。", "medium"),
+    ("{company_name} 或有事项明细", "未确认的或有负债清单。", "medium"),
+    ("{company_name} 承诺事项明细", "尚未履行的重大承诺事项。", "medium"),
+]: entries.append(F(FN, FC, p, t, d))
+
+# 财务比率完整清单（补充更多比率）
+for ratio, p in [
+    ("毛利率/同行中位数比", "medium"),
+    ("净利率/同行中位数比", "medium"),
+    ("ROE/同行中位数比", "medium"),
+    ("应收周转/同行中位数比", "medium"),
+    ("存货周转/同行中位数比", "medium"),
+    ("经营现金流/收入比", "medium"),
+    ("CAPEX/经营现金流比", "medium"),
+    ("有息负债/EBITDA", "medium"),
+    ("净负债/EBITDA", "medium"),
+    ("股息支付率", "medium"),
+    ("每股收益（EPS）", "high"),
+    ("每股净资产（BPS）", "medium"),
+    ("每股经营现金流", "medium"),
+    ("每股自由现金流", "medium"),
+    ("每股分红", "medium"),
+    ("市盈率（PE）", "high"),
+    ("市净率（PB）", "medium"),
+    ("市销率（PS）", "medium"),
+    ("EV/EBITDA", "high"),
+    ("EV/Sales", "medium"),
+    ("PEG", "medium"),
+]:
+    entries.append(D(FN, FC, p,
+        f"{{company_name}} {ratio}趋势",
+        f"{ratio}的历史趋势。", TS))
+
+# ---- 8.3 Industry: 更多行业数据点 ----
+
+# 行业定量指标
+for t, d, p in [
+    ("{industry} 行业平均毛利率", "行业平均毛利率水平及变化趋势。", "medium"),
+    ("{industry} 行业平均净利率", "行业平均净利率水平。", "medium"),
+    ("{industry} 行业平均ROE", "行业平均ROE水平。", "medium"),
+    ("{industry} 行业平均研发费率", "行业平均研发投入占比。", "medium"),
+    ("{industry} 行业平均PE", "行业平均估值倍数。", "medium"),
+    ("{industry} 行业总产能", "行业总产能规模及变化。", "medium"),
+    ("{industry} 行业产能利用率", "行业平均产能利用率。", "medium"),
+    ("{industry} 行业库存水平", "行业整体库存水平及变化趋势。", "medium"),
+    ("{industry} 行业价格指数", "行业产品价格指数及变化。", "medium"),
+    ("{industry} 行业出口规模", "行业出口总量/金额及变化。", "medium"),
+    ("{industry} 行业进口规模", "行业进口总量/金额及变化。", "medium"),
+    ("{industry} 行业固定资产投资", "行业固定资产投资额及增速。", "medium"),
+    ("{industry} 行业从业人员", "行业从业人员总量及变化趋势。", "low"),
+    ("{industry} 行业平均薪酬", "行业从业人员平均薪酬水平。", "low"),
+]: entries.append(F(I, IC, p, t, d))
+
+for t, d in [
+    ("{industry} 行业毛利率趋势", "行业平均毛利率历史数据。"),
+    ("{industry} 行业产能变化趋势", "行业总产能历史及预测。"),
+    ("{industry} 行业价格趋势", "行业产品价格历史走势。"),
+    ("{industry} 行业进出口趋势", "行业进出口金额历史数据。"),
+]: entries.append(D(I, IC, "medium", t, d, TS))
+
+# 各竞争对手近况
+for i in range(6, 11):
+    entries.append(F(I, IC, "low",
+        f"{{industry}} 竞争对手{i}概况",
+        f"第{i}号竞争对手的基本情况及最新动态。"))
+
+# ---- 8.4 Peer Info: 更多可比维度 ----
+
+# 可比公司个股详情
+for i in range(1, 11):
+    entries.append(F(P, PC, "medium",
+        f"{{company_name}} 可比公司{i}业务概况",
+        f"第{i}号可比公司的主营业务、竞争策略及最新动态。"))
+
+# 更多可比指标
+for metric, cols in [
+    ("毛利率趋势", ["公司", *PERIODS, "来源"]),
+    ("净利率趋势", ["公司", *PERIODS, "来源"]),
+    ("ROE趋势", ["公司", *PERIODS, "来源"]),
+    ("收入增速趋势", ["公司", *PERIODS, "来源"]),
+    ("资产负债率趋势", ["公司", *PERIODS, "来源"]),
+    ("市值变化", ["公司", "1年前", "6月前", "当前", "来源"]),
+    ("股价表现", ["公司", "近1月", "近3月", "近1年", "YTD", "来源"]),
+]:
+    entries.append(D(P, PC, "medium",
+        f"{{company_name}} 可比公司{metric}对比",
+        f"可比公司{metric}对比表。", cols))
+
+# ---- 8.5 Operating Metrics: 更多行业特有KPI ----
+
+# 更多通用KPI模板
+for i in range(11, 21):
+    entries.append(D(O, OC, "low",
+        f"{{company_name}} 行业特有KPI_{i}",
+        f"行业特有的第{i}个关键运营指标。", TS))
+
+# 月度/季度KPI
+for q in ["Q1", "Q2", "Q3", "Q4"]:
+    entries.append(D(O, OC, "low",
+        f"{{company_name}} {q}产量数据",
+        f"第{q}的主要产品产量。", TS))
+    entries.append(D(O, OC, "low",
+        f"{{company_name}} {q}出货量数据",
+        f"第{q}的主要产品出货量。", TS))
+    entries.append(D(O, OC, "low",
+        f"{{company_name}} {q}ASP数据",
+        f"第{q}的主要产品平均售价。", TS))
+
+# 效率变化深度分析
+for t, d, p in [
+    ("{company_name} 运费/收入比趋势", "运费占收入比例变化趋势。", "medium"),
+    ("{company_name} 电力/产量比趋势", "单位产品电力消耗变化。", "medium"),
+    ("{company_name} 人工成本/收入比", "人工成本占收入比例变化。", "medium"),
+    ("{company_name} 折旧/收入比", "折旧占收入比例变化。", "medium"),
+    ("{company_name} 维修费用趋势", "设备维修费用及占比变化。", "low"),
+    ("{company_name} 研发成果转化率", "研发投入到产品商业化的转化效率。", "medium"),
+    ("{company_name} 人均研发产出", "研发人员人均专利/论文/产品产出。", "low"),
+    ("{company_name} 设备OEE", "关键设备综合效率（如适用）。", "low"),
+]: entries.append(F(O, OC, p, t, d))
+
+# ---- 8.6 History: 更多治理与合规细节 ----
+
+for t, d, p in [
+    ("{company_name} 董事会会议频率", "报告期董事会召开次数及出席率。", "low"),
+    ("{company_name} 股东大会重要决议", "近年股东大会的重要决议事项。", "low"),
+    ("{company_name} 独立董事意见", "独立董事是否发表过非标准意见。", "medium"),
+    ("{company_name} 内部审计发现", "内部审计发现的主要问题及整改。", "low"),
+    ("{company_name} 信息系统建设", "ERP/MES等信息系统建设情况。", "low"),
+    ("{company_name} 数据安全管理", "数据安全制度及合规措施。", "low"),
+    ("{company_name} 社会责任报告", "CSR报告发布情况及主要内容。", "low"),
+    ("{company_name} 投资者关系管理", "IR活动频次、投资者沟通渠道。", "low"),
+    ("{company_name} 媒体关注度", "主要媒体报道及舆情监控。", "low"),
+    ("{company_name} 行业协会参与", "公司在行业协会中的地位及参与度。", "low"),
+    ("{company_name} 标准制定参与", "公司是否参与行业标准制定。", "low"),
+    ("{company_name} 政府关系", "与地方/行业主管部门的关系。", "low"),
+]: entries.append(F(H, HC, p, t, d))
+
+# ---- 8.7 Risk: 更多细分风险条目 ----
+
+for t, d, p in [
+    ("{company_name} 产品单一化风险", "收入过度依赖单一产品的风险。", "medium"),
+    ("{company_name} 区域集中风险", "收入过度集中于单一区域的风险。", "medium"),
+    ("{company_name} 行业单一化风险", "下游应用过度集中于单一行业。", "medium"),
+    ("{company_name} 关键设备依赖风险", "关键设备故障或无法采购的风险。", "low"),
+    ("{company_name} 供应链国产化风险", "被要求国产替代或供应链脱钩的风险。", "medium"),
+    ("{company_name} 产品认证风险", "关键产品认证不通过或被撤销。", "medium"),
+    ("{company_name} 股东减持压力", "大股东或机构集中减持的压力。", "medium"),
+    ("{company_name} 股权质押平仓风险", "控股股东质押比例过高的平仓风险。", "medium"),
+    ("{company_name} 管理层更迭风险", "管理层集中换届或突然离职的风险。", "medium"),
+    ("{company_name} 信用评级下调风险", "信用评级被下调的可能性及影响。", "low"),
+    ("{company_name} 商业秘密泄露风险", "核心技术或商业秘密泄露的风险。", "medium"),
+    ("{company_name} 客户集中度恶化风险", "客户集中度进一步提高的风险。", "medium"),
+    ("{company_name} 行业监管趋严风险", "行业监管政策变化的潜在影响。", "medium"),
+    ("{company_name} 竞品降价风险", "竞争对手发起价格战的风险。", "medium"),
+    ("{company_name} 新进入者冲击风险", "新进入者（包括跨界）的竞争冲击。", "medium"),
+    ("{company_name} 技术封锁/制裁风险", "核心技术或设备被限制获取的风险。", "medium"),
+    ("{company_name} 出口目的国政策风险", "出口目的国政策变化导致市场关闭。", "medium"),
+    ("{company_name} 原材料依赖进口风险", "关键原材料进口渠道被限制。", "medium"),
+    ("{company_name} 人才招聘困难风险", "关键岗位人才招聘困难的风险。", "low"),
+    ("{company_name} 品牌声誉风险", "品牌负面事件导致声誉受损。", "medium"),
+]: entries.append(F(R, RC, p, t, d))
+
+# 风险量化
+entries.append(D(R, RC, "high", "{company_name} 风险影响矩阵",
+    "各风险的概率、影响程度及优先级。",
+    ["风险项", "发生概率", "影响程度", "优先级", "监控指标", "来源"]))
+entries.append(D(R, RC, "medium", "{company_name} 压力测试结果",
+    "关键变量压力测试对利润的影响。",
+    ["压力变量", "压力幅度", "对收入影响", "对净利影响", "对估值影响", "来源"]))
+
+
+# ══════════════════════════════════════════════
+# 9. 从xlsx触发的关键细节补充
+# ══════════════════════════════════════════════
+
+# ---- 9.1 股权关键细节（来自xlsx第1章1-3~1-7节）----
+
+for t, d, p in [
+    ("{company_name} 股东出资方式", "各股东是货币出资还是非货币出资（技术/实物/土地等）。", "medium"),
+    ("{company_name} 非货币出资评估", "非货币出资的评估依据及公允性。", "low"),
+    ("{company_name} 是否存在出资瑕疵", "是否存在出资不实、虚假出资、抽逃出资。", "high"),
+    ("{company_name} 是否存在代持股", "是否存在委托持股、信托持股、股权代持。", "high"),
+    ("{company_name} 股东持股是否存在权属争议", "股东持股是否存在权属纠纷或潜在争议。", "high"),
+    ("{company_name} 控制权认定依据", "实际控制人的认定逻辑（持股/协议/其他）。", "high"),
+    ("{company_name} 控制权稳定性", "控制权最近三年是否变化，未来是否有潜在变动。", "high"),
+    ("{company_name} 实际控制人控制的其他企业", "实控人控制的所有企业清单及主营。", "medium"),
+    ("{company_name} 股东违法违规记录", "控股股东、实控人是否存在重大违法违规记录。", "high"),
+    ("{company_name} 股东诉讼/仲裁情况", "控股股东、实控人涉及的诉讼仲裁。", "medium"),
+    ("{company_name} 股东失信记录", "控股股东、实控人是否存在失信被执行人记录。", "high"),
+    ("{company_name} 违规入股情况", "是否存在违规入股、入股价格异常。", "medium"),
+    ("{company_name} 私募基金股东备案", "股东中私募基金的备案及管理人登记情况。", "low"),
+    ("{company_name} 股东间利益安排", "股东之间是否存在特殊利益安排（如优先清算权）。", "medium"),
+    ("{company_name} 重要承诺及履行", "控股股东、实控人、董监高作出的重要承诺及履行情况。", "medium"),
+]: entries.append(F(H, HC, p, t, d))
+
+# ---- 9.2 历史关键细节（来自xlsx 1-1~1-2节）----
+
+for t, d, p in [
+    ("{company_name} 改制重组方案", "改制/重组时的业务、资产、人员安排方案。", "medium"),
+    ("{company_name} 改制时资产评估", "改制时的资产评估方法及估值依据。", "medium"),
+    ("{company_name} 国有资产处置合规", "如涉及国有资产，处置程序是否合规。", "medium"),
+    ("{company_name} 重大重组对业绩的影响", "重组前后的业绩对比及影响程度。", "medium"),
+    ("{company_name} 历史重大对外投资", "历史上的重大对外投资项目及收益情况。", "medium"),
+    ("{company_name} 历史上的业务剥离", "历史上剥离的业务及剥离原因。", "medium"),
+    ("{company_name} 前次融资的估值", "历次融资的投前/投后估值变化。", "high"),
+]: entries.append(F(H, HC, p, t, d))
+
+entries.append(D(H, HC, "medium", "{company_name} 历次融资估值变化",
+    "历次融资的时间、金额及对应估值。",
+    ["时间", "融资类型", "金额", "投后估值", "来源"]))
+
+# ---- 9.3 法律关键细节（来自xlsx第7章）----
+
+for t, d, p in [
+    ("{company_name} 报告期行政处罚", "报告期内受到的行政处罚及整改情况。", "high"),
+    ("{company_name} 税务合规情况", "是否存在补税、欠税、税务争议。", "medium"),
+    ("{company_name} 海关合规情况", "进出口是否存在海关违规或纠纷。", "low"),
+    ("{company_name} 工商违规情况", "是否存在工商违规记录。", "medium"),
+    ("{company_name} 劳动争议情况", "是否存在重大劳动纠纷或仲裁。", "low"),
+    ("{company_name} 产品责任风险", "产品责任诉讼或潜在产品责任风险。", "medium"),
+    ("{company_name} 环保合规处罚", "环保违规处罚历史及整改情况。", "medium"),
+    ("{company_name} 安全生产处罚", "安全生产违规处罚历史。", "low"),
+    ("{company_name} 专利侵权风险评估", "是否存在被诉或涉嫌侵犯他人专利的风险。", "medium"),
+    ("{company_name} 商标侵权风险评估", "商标是否存在侵权争议。", "low"),
+    ("{company_name} 重大担保/反担保", "为外部主体提供的担保及反担保安排。", "medium"),
+    ("{company_name} 关联方担保情况", "控股股东或关联方是否为公司提供担保。", "medium"),
+]: entries.append(F(R, RC, p, t, d))
+
+# ---- 9.4 财务关键细节（来自xlsx第3章未覆盖的）----
+
+for t, d, p in [
+    ("{company_name} 货币资金受限情况", "受限货币资金金额及原因（保证金/冻结等）。", "medium"),
+    ("{company_name} 大额资金流水异常", "是否存在大额异常资金流转。", "high"),
+    ("{company_name} 资金被关联方占用", "是否存在关联方非经营性资金占用。", "high"),
+    ("{company_name} 财务公司/资金池", "是否参与关联方财务公司或资金池。", "medium"),
+    ("{company_name} 应收票据背书/贴现", "应收票据背书及贴现的规模及占比。", "low"),
+    ("{company_name} 预计负债详情", "预计负债的确认依据及估计方法。", "medium"),
+    ("{company_name} 租赁负债分析", "使用权资产及租赁负债的规模。", "low"),
+    ("{company_name} 递延所得税分析", "递延所得税资产/负债的构成。", "low"),
+    ("{company_name} 资产负债表日后事项", "资产负债表日后发生的重大事项。", "medium"),
+    ("{company_name} 境内外报表差异", "如有多套报表，各报表之间的差异。", "low"),
+    ("{company_name} 合并报表范围变动", "报告期合并范围变动及原因。", "medium"),
+    ("{company_name} 少数股东权益分析", "少数股东权益的规模及利润分配。", "medium"),
+    ("{company_name} 财务信息与非财务信息印证", "财务数据与运营数据、行业数据的交叉验证。", "high"),
+    ("{company_name} 产量与原材料/水电费匹配", "产量与原材料消耗、水电费的匹配关系。", "high"),
+    ("{company_name} 销量与运费匹配", "销量与运费的匹配关系。", "medium"),
+    ("{company_name} 毛利率与工艺改进匹配", "毛利率变化与工艺改进、原材料价格的匹配。", "medium"),
+    ("{company_name} 经营模式与财报数据匹配", "经营模式与财务报表数据的一致性。", "medium"),
+    ("{company_name} 业绩对赌完成情况", "如有对赌，精准完成是否存在人为调节嫌疑。", "high"),
+]: entries.append(F(FN, FC, p, t, d))
+
+# ---- 9.5 业务关键细节（来自xlsx第2章未覆盖的）----
+
+for t, d, p in [
+    ("{company_name} 销售收入异常增长检查", "期末(Q4/12月)收入是否异常偏高。", "high"),
+    ("{company_name} 销售退回分析", "报告期销售退回的金额、占比及原因。", "medium"),
+    ("{company_name} 售后服务体系", "售后服务组织、费用及客户服务能力。", "medium"),
+    ("{company_name} 供应链金融安排", "是否涉及供应链金融，模式及规模。", "low"),
+    ("{company_name} 客户/供应商重叠分析", "既是客户又是供应商的情况及原因。", "medium"),
+    ("{company_name} 异常客户识别", "是否存在新增即大额、成立时间短、注册地异常等可疑客户。", "high"),
+    ("{company_name} 异常供应商识别", "是否存在成立时间短、注册地异常、前员工开设等可疑供应商。", "high"),
+    ("{company_name} 现金交易占比", "现金收付交易的占比及必要性。", "medium"),
+    ("{company_name} 偶发交易分析", "非经常性的偶发交易及其合理性。", "low"),
+    ("{company_name} 发行人/第三方数据引用可靠性", "引用的第三方行业数据的来源可信度。", "medium"),
+    ("{company_name} 行业专家/协会意见", "行业专家或协会对公司的评价。", "low"),
+]: entries.append(F(B, BC, p, t, d))
+
+# ---- 9.6 行业关键数据（来自xlsx 2-1节）----
+
+for t, d, p in [
+    ("{industry} 行业主要产品价格走势", "行业核心产品价格近5年走势。", "high"),
+    ("{industry} 行业产能扩张情况", "行业近年新建/在建/拟建产能汇总。", "high"),
+    ("{industry} 行业库存周期位置", "行业当前库存水平及所处库存周期阶段。", "medium"),
+    ("{industry} 行业集中度变化趋势", "CR3/CR5近5年变化及驱动因素。", "medium"),
+    ("{industry} 行业平均产能利用率趋势", "行业平均利用率及与价格的关系。", "medium"),
+    ("{industry} 行业供需缺口", "行业供给与需求之间的缺口及趋势。", "high"),
+    ("{industry} 行业主要上市公司近期业绩", "主要上市公司最新季度业绩表现。", "medium"),
+]: entries.append(F(I, IC, p, t, d))
+
+entries.append(D(I, IC, "high", "{industry} 行业产品价格走势",
+    "行业核心产品价格历史数据。", TS))
+entries.append(D(I, IC, "high", "{industry} 行业供需平衡表",
+    "行业总供给、总需求及缺口。",
+    ["年份", "总供给", "总需求", "缺口", "单位", "来源"]))
+entries.append(D(I, IC, "medium", "{industry} 行业产能扩张计划",
+    "行业主要企业的在建/拟建产能汇总。",
+    ["企业", "项目", "新增产能", "预计投产", "来源"]))
+
+
+# ══════════════════════════════════════════════
 # Assign IDs & Output
 # ══════════════════════════════════════════════
 abbr_map = {
@@ -1194,7 +1566,26 @@ for e in entries:
         if k in e:
             e[k] = LiteralStr(e[k])
 
+document = {
+    "document_metadata": {
+        "periods": {
+            "{期间1}": "报告期第1年",
+            "{期间2}": "报告期第2年",
+            "{期间3}": "报告期第3年",
+            "{期间4}": "报告期最近一季的上一年可比期间",
+            "{期间5}": "报告期最近一季",
+        },
+        "forecast_periods": {
+            "{预测期1}": "预测第1年",
+            "{预测期2}": "预测第2年",
+            "{预测期3}": "预测第3年",
+        },
+        "note": "使用时根据目标公司的实际报告期替换占位符。例如期间1=2021, 期间2=2022, 期间3=2023, 期间4=2024H1, 期间5=2025H1。",
+    },
+    "entries": entries,
+}
+
 with open("src/automated_research_report_generator/flow/config/registry_template.yaml", "w", encoding="utf-8") as f:
-    yaml.dump(entries, f, allow_unicode=True, default_flow_style=False, sort_keys=False, width=120)
+    yaml.dump(document, f, allow_unicode=True, default_flow_style=False, sort_keys=False, width=120)
 
 print("Done!", file=sys.stderr)
