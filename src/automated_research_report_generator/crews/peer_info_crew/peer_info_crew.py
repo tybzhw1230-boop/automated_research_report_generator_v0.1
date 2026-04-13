@@ -1,51 +1,68 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Callable, List
+from typing import List
 
+import yaml
 from crewai import Agent, Crew, Process, Task
 from crewai.agents.agent_builder.base_agent import BaseAgent
 from crewai.project import CrewBase, agent, crew, task
 from crewai_tools import SerperDevTool
 
-from automated_research_report_generator.crews.crew_profile_loader import (
-    load_research_task_profile,
-    strip_research_task_profile_fields,
-)
 from automated_research_report_generator.flow.common import PROJECT_ROOT
-from automated_research_report_generator.flow.models import ResearchRegistryCheckResult
-from automated_research_report_generator.llm_config import get_heavy_llm
-from automated_research_report_generator.tools import (
-    AddEntryTool,
-    AddEvidenceTool,
-    ComparableValuationTool,
-    ReadRegistryTool,
-    RegistryReviewTool,
-    StatusUpdateTool,
-    TushareValuationDataTool,
-    UpdateEntryTool,
-)
-from automated_research_report_generator.tools.pdf_page_tools import ReadPdfPageIndexTool, ReadPdfPagesTool
+from automated_research_report_generator.llm_config import get_heavy_llm, get_lite_llm
+from automated_research_report_generator.tools import TusharePeerDataTool
 
 PROJECT_LOG_DIR = PROJECT_ROOT / "logs"
 DEFAULT_CREW_LOG_FILE = str(PROJECT_LOG_DIR / "peer_info_crew.json")
-shared_pdf_page_index_tool = ReadPdfPageIndexTool()
-shared_pdf_page_reader_tool = ReadPdfPagesTool()
-CREW_PROFILE = load_research_task_profile(__file__)
+ANALYSIS_PROFILE_KEYS = ("crew_name", "pack_name", "pack_title")
+
+
+def load_analysis_profile(module_file: str) -> dict[str, str]:
+    """
+    目的：从当前专题自己的 `tasks.yaml` 中读取 Flow 运行所需的最小 profile 信息。
+    功能：抽取 `crew_name`、`pack_name` 和 `pack_title`，供 Flow 编排与产物命名使用。
+    实现逻辑：定位到当前模块同目录下的 `config/tasks.yaml`，只读取 `synthesize_and_output` 中维护的 profile 字段。
+    可调参数：`module_file`，用于定位当前专题 crew 所在目录。
+    默认参数及原因：默认只认 `synthesize_and_output`，原因是最终 pack 的命名语义应由综合任务单点维护。
+    """
+
+    config_path = Path(module_file).resolve().parent / "config" / "tasks.yaml"
+    tasks_config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    task_payload = tasks_config.get("synthesize_and_output")
+    if not isinstance(task_payload, dict):
+        raise ValueError(
+            f"Missing synthesize_and_output config in {config_path.as_posix()}"
+        )
+
+    missing_keys = [
+        key for key in ANALYSIS_PROFILE_KEYS if task_payload.get(key) is None
+    ]
+    if missing_keys:
+        missing_display = ", ".join(sorted(missing_keys))
+        raise ValueError(
+            f"Missing analysis profile keys in {config_path.as_posix()}: {missing_display}"
+        )
+
+    return {key: str(task_payload[key]) for key in ANALYSIS_PROFILE_KEYS}
+
+
+CREW_PROFILE = load_analysis_profile(__file__)
 
 
 @CrewBase
 class PeerInfoCrew:
     """
-    目的：承接同行筛选与同行数据底稿专题的 research 子 crew。
-    功能：围绕同行集合、peer 财务与估值倍数产出 peer_info 分析包。
-    实现逻辑：本文件直接声明同行专题的 agent、task 和 crew，不再依赖共享基类。
-    可调参数：YAML 配置、专题 guidance、额外工具工厂、日志路径和模型温度。
-    默认参数及原因：默认注入同行估值工具，原因是当前专题的目标就是给 valuation 阶段准备底稿。
+    目的：承接同行专题的专用三阶段流程。
+    功能：先筛选可比公司，再通过 Tushare 拉取同行数据，最后综合输出同行信息分析包。
+    实现逻辑：把同行专题从通用的 PDF/搜索双源骨架改成“同行清单 source + 同行数据 source + pack”三步，并把职责分别挂到三个 agent。
+    可调参数：模型温度、日志路径、任务配置，以及同行筛选和 Tushare 取数工具。
+    默认参数及原因：保持 3-agent / 3-task 的最小稳定结构，原因是同行清单、同行数据和综合写作的职责边界明显不同。
     """
 
     agents: List[BaseAgent]
     tasks: List[Task]
+
     agents_config = "config/agents.yaml"
     tasks_config = "config/tasks.yaml"
     output_log_file_path: str | bool | None = DEFAULT_CREW_LOG_FILE
@@ -53,131 +70,32 @@ class PeerInfoCrew:
     crew_name = CREW_PROFILE["crew_name"]
     pack_name = CREW_PROFILE["pack_name"]
     pack_title = CREW_PROFILE["pack_title"]
-    pack_focus = CREW_PROFILE["pack_focus"]
-    output_title = CREW_PROFILE["output_title"]
-    search_guidance = CREW_PROFILE["search_guidance"]
-    extract_guidance = CREW_PROFILE["extract_guidance"]
-    qa_guidance = CREW_PROFILE["qa_guidance"]
-    synthesize_guidance = CREW_PROFILE["synthesize_guidance"]
-    output_skeleton = CREW_PROFILE["output_skeleton"]
-    use_search_tool = True
-    default_temperature = 0.2
-    extra_tool_factories: tuple[Callable[[], object], ...] = (TushareValuationDataTool, ComparableValuationTool)
+    default_temperature = 0.35
+    peer_list_temperature = 0.2
+    peer_data_temperature = 0.1
+    search_tool = SerperDevTool()
+    tushare_peer_data_tool = TusharePeerDataTool()
 
-    def _extra_tools(self) -> list[object]:
+    @agent
+    def peer_list_agent(self) -> Agent:
         """
-        目的：集中生成同行专题额外工具实例。
-        功能：根据 `extra_tool_factories` 返回额外 tools 列表。
-        实现逻辑：逐个调用工厂函数并收集返回值。
-        可调参数：`extra_tool_factories`。
-        默认参数及原因：默认注入 Tushare 与可比估值工具，原因是同行专题本身就要准备估值底稿。
-        """
-
-        return [factory() for factory in self.extra_tool_factories]
-
-    def _search_tools(self) -> list[object]:
-        """
-        目的：集中组装 `search_facts` 任务可用的工具集合。
-        功能：只给外部搜索候选采集阶段开放搜索类工具和只读 registry 能力。
-        实现逻辑：按需注入 `SerperDevTool`，再追加 `ReadRegistryTool` 和专题扩展工具。
-        可调参数：`use_search_tool` 与 `extra_tool_factories`。
-        默认参数及原因：默认启用搜索工具并保留专题扩展工具，原因是外部补证阶段仍需要公开资料与专题数据源。
-        """
-
-        tools: list[object] = [ReadRegistryTool()]
-        if self.use_search_tool:
-            tools.insert(0, SerperDevTool())
-        tools.extend(self._extra_tools())
-        return tools
-
-    def _extract_tools(self) -> list[object]:
-        """
-        目的：集中组装 `extract_file_facts` 任务可用的工具集合。
-        功能：只给 PDF 候选采集阶段开放页码索引、页内容读取和只读 registry 能力。
-        实现逻辑：固定返回 PDF 页面索引工具、页面读取工具和 `ReadRegistryTool`。
-        可调参数：当前无显式参数。
-        默认参数及原因：默认不开放任何 registry 写入能力，原因是提取阶段只负责产出候选 patch 报告。
-        """
-
-        return [
-            shared_pdf_page_index_tool,
-            shared_pdf_page_reader_tool,
-            ReadRegistryTool(),
-        ]
-
-    def _registry_recording_tools(self) -> list[object]:
-        """
-        目的：集中组装两个 `record_*` 任务可用的 registry 落账工具集合。
-        功能：给登记与修订阶段开放条目读取、更新、新增、证据补充和状态留痕能力。
-        实现逻辑：固定返回 registry 读写相关工具，不注入搜索或 PDF 工具。
-        可调参数：当前无显式参数。
-        默认参数及原因：默认把 amend 与新增都放在这个阶段，原因是要把“采集”和“落账”职责硬隔离。
-        """
-
-        return [
-            ReadRegistryTool(),
-            UpdateEntryTool(),
-            AddEntryTool(),
-            AddEvidenceTool(),
-            StatusUpdateTool(),
-            RegistryReviewTool(),
-        ]
-
-    def _qa_tools(self) -> list[object]:
-        """
-        目的：集中组装 `check_registry` 任务可用的最小 QA 工具集合。
-        功能：给内部 QA 阶段提供 registry 检查、状态标记和 review 留痕能力。
-        实现逻辑：固定返回 `ReadRegistryTool`、`StatusUpdateTool` 和 `RegistryReviewTool`。
-        可调参数：当前无显式参数。
-        默认参数及原因：默认不开放新增证据与新增条目能力，原因是 QA 只做检查和返工标记。
-        """
-
-        return [
-            ReadRegistryTool(),
-            StatusUpdateTool(),
-            RegistryReviewTool(),
-        ]
-
-    def _synthesizing_tools(self) -> list[object]:
-        """
-        目的：集中组装 `synthesize_and_output` 任务可用的只读综合工具集合。
-        功能：给综合阶段提供 registry 读取和审计留痕能力，不允许改写条目。
-        实现逻辑：固定返回 `ReadRegistryTool` 和 `RegistryReviewTool`。
-        可调参数：当前无显式参数。
-        默认参数及原因：默认严格只读，原因是综合阶段只能消费已沉淀证据，不能再偷偷补账。
-        """
-
-        return [
-            ReadRegistryTool(),
-            RegistryReviewTool(),
-        ]
-
-    def _build_agent(
-        self,
-        *,
-        config_name: str,
-        tools: list[object],
-        temperature: float | None = None,
-        allow_delegation: bool = False,
-    ) -> Agent:
-        """
-        目的：统一构建当前专题使用的各类 Agent。
-        功能：把 YAML 配置、模型参数和通用运行约束组装成 `Agent` 实例。
-        实现逻辑：读取对应 agent 配置后，按统一的 LLM 与运行参数返回 Agent。
-        可调参数：`config_name`、`tools`、`temperature` 和 `allow_delegation`。
-        默认参数及原因：默认关闭 delegation，原因是 research 子 crew 改为顺序执行后，各 worker 只负责自己的任务边界。
+        目的：构建同行清单筛选 agent。
+        功能：结合行业分析包、业务分析包和公开搜索结果，输出可比公司名单、纳入理由和排除理由。
+        实现逻辑：只挂载搜索工具，不暴露 PDF 工具和 Tushare 工具，确保第一步专注于样本筛选解释。
+        可调参数：`peer_list_temperature`、`max_iter`、搜索工具列表和 YAML 里的角色设定。
+        默认参数及原因：默认温度为 `0.2`，原因是同行筛选需要一定判断空间，但仍要保持收敛。
         """
 
         return Agent(
-            config=self.agents_config[config_name],  # type: ignore[index]
-            tools=tools,
-            llm=get_heavy_llm(temperature=temperature if temperature is not None else self.default_temperature),
-            function_calling_llm=None,
-            max_iter=20,
+            config=self.agents_config["peer_list_agent"],  # type: ignore[index]
+            tools=[self.search_tool],
+            llm=get_heavy_llm(temperature=float(self.peer_list_temperature)),
+            function_calling_llm=get_lite_llm(temperature=0.1),
+            max_iter=14,
             max_rpm=None,
             max_execution_time=None,
             verbose=True,
-            allow_delegation=allow_delegation,
+            allow_delegation=False,
             step_callback=None,
             cache=True,
             allow_code_execution=False,
@@ -190,176 +108,134 @@ class PeerInfoCrew:
         )
 
     @agent
-    def search_fact_agent(self) -> Agent:
+    def peer_data_agent(self) -> Agent:
         """
-        目的：定义外部搜索候选采集与落账复用的 search agent。
-        功能：同一 agent 同时承担搜索候选采集和 search 结果的 registry 落账任务。
-        实现逻辑：agent 本身不挂载工具，实际能力完全由 task 级工具集控制。
-        可调参数：YAML agent 配置和模型温度。
-        默认参数及原因：默认 `temperature=0.15`，原因是搜索阶段需要兼顾稳定性和适度发散。
+        目的：构建同行数据取数 agent。
+        功能：基于已确认的同行清单，用 Tushare 批量拉取同行财务、估值和资本结构等数据底稿。
+        实现逻辑：只挂载 `TusharePeerDataTool`，不允许回退到公开搜索补数，避免同行数据口径混杂。
+        可调参数：`peer_data_temperature`、`max_iter`、Tushare 工具和 YAML 里的角色设定。
+        默认参数及原因：默认温度为 `0.1`，原因是这个阶段更强调稳定取数和结构化整理。
         """
-
-        return self._build_agent(config_name="search_fact_agent", tools=[], temperature=0.15)
-
-    @agent
-    def extract_file_fact_agent(self) -> Agent:
-        """
-        目的：定义 PDF 候选采集与落账复用的 extract agent。
-        功能：同一 agent 同时承担原文候选采集和 extract 结果的 registry 落账任务。
-        实现逻辑：agent 本身不挂载工具，实际能力完全由 task 级工具集控制。
-        可调参数：YAML agent 配置和模型温度。
-        默认参数及原因：默认 `temperature=0.1`，原因是原文提取优先追求稳定取证。
-        """
-
-        return self._build_agent(config_name="extract_file_fact_agent", tools=[], temperature=0.1)
-
-    @agent
-    def qa_check_agent(self) -> Agent:
-        """
-        目的：定义专题内部 QA agent。
-        功能：检查本 pack 的 registry 覆盖度并写入返工留痕。
-        实现逻辑：agent 本身不挂载工具，实际能力完全由 `check_registry` 任务控制。
-        可调参数：YAML agent 配置和模型温度。
-        默认参数及原因：默认 `temperature=0.1`，原因是 QA 判断应更保守稳定。
-        """
-
-        return self._build_agent(config_name="qa_check_agent", tools=[], temperature=0.1)
+        return Agent(
+            config=self.agents_config["peer_data_agent"],  # type: ignore[index]
+            tools=[self.tushare_peer_data_tool],
+            llm=get_heavy_llm(temperature=float(self.peer_data_temperature)),
+            function_calling_llm=get_lite_llm(temperature=0.1),
+            max_iter=18,
+            max_rpm=None,
+            max_execution_time=None,
+            verbose=True,
+            allow_delegation=False,
+            step_callback=None,
+            cache=True,
+            allow_code_execution=False,
+            max_retry_limit=2,
+            respect_context_window=True,
+            use_system_prompt=True,
+            reasoning=False,
+            max_reasoning_attempts=None,
+            inject_date=True,
+        )
 
     @agent
     def synthesizing_agent(self) -> Agent:
         """
-        目的：定义专题最终综合输出 agent。
-        功能：把已沉淀的事实、数据、判断和冲突整理成 Markdown 分析包。
-        实现逻辑：agent 本身不挂载工具，实际能力完全由只读综合 task 控制。
-        可调参数：YAML agent 配置和模型温度。
-        默认参数及原因：默认 `temperature=0.2`，原因是综合输出需要收束但仍保留一定表达弹性。
+        目的：构建同行专题综合写作 agent。
+        功能：消费同行清单 source 和同行数据 source，输出最终同行信息分析包。
+        实现逻辑：不再挂载额外工具，只做带边界说明的综合、归纳和结构化写作。
+        可调参数：`default_temperature`、`max_iter` 和 YAML 里的综合 persona。
+        默认参数及原因：默认温度为 `0.35`，原因是综合阶段需要组织表达，但不应脱离 source 边界。
         """
-
-        return self._build_agent(config_name="synthesizing_agent", tools=[], temperature=0.2)
+        return Agent(
+            config=self.agents_config["synthesizing_agent"],  # type: ignore[index]
+            tools=[],
+            llm=get_heavy_llm(temperature=float(self.default_temperature)),
+            function_calling_llm=None,
+            max_iter=18,
+            max_rpm=None,
+            max_execution_time=None,
+            verbose=True,
+            allow_delegation=False,
+            step_callback=None,
+            cache=True,
+            allow_code_execution=False,
+            max_retry_limit=2,
+            respect_context_window=True,
+            use_system_prompt=True,
+            reasoning=False,
+            max_reasoning_attempts=None,
+            inject_date=True,
+        )
 
     @task
-    def extract_file_facts(self) -> Task:
+    def build_peer_list(self) -> Task:
         """
-        目的：定义专题的 PDF 候选采集任务。
-        功能：驱动 extract agent 回到 PDF 取证，并产出候选 patch 报告。
-        实现逻辑：读取 `tasks.yaml` 中的 `extract_file_facts` 配置，并挂载 PDF 读取类 task 工具。
-        可调参数：YAML task 配置。
-        默认参数及原因：默认不开结构化 JSON 输出，原因是任务主要通过候选 patch 文本交接给下游 record task。
+        目的：定义同行清单筛选任务。
+        功能：让 agent 基于行业和业务上下文加公开搜索输出同行清单 source。
+        实现逻辑：直接读取本专题 `build_peer_list` 配置，并只挂搜索工具。
+        可调参数：任务 YAML 内容、搜索工具和 `peer_list_source_output_path` 输入。
+        默认参数及原因：默认串行执行，原因是同行数据取数必须建立在同行清单已经收敛之后。
         """
 
+        task_config = dict(self.tasks_config["build_peer_list"])  # type: ignore[index]
+        for key in ANALYSIS_PROFILE_KEYS:
+            task_config.pop(key, None)
         return Task(
-            config=strip_research_task_profile_fields(self.tasks_config["extract_file_facts"]),  # type: ignore[index]
-            tools=self._extract_tools(),
+            config=task_config,
+            agent=self.peer_list_agent(),
+            tools=[self.search_tool],
             async_execution=False,
             output_json=None,
             output_pydantic=None,
             human_input=False,
             cache=True,
-            markdown=False,
+            markdown=True,
         )
 
     @task
-    def record_extract_registry(self) -> Task:
+    def collect_peer_data(self) -> Task:
         """
-        目的：定义专题的 extract 结果登记与修订任务。
-        功能：把 `extract_file_facts` 产出的候选 patch 报告优先回填到已有 registry 条目。
-        实现逻辑：复用 extract agent，并把 `extract_file_facts` 作为唯一上游上下文输入。
-        可调参数：YAML task 配置。
-        默认参数及原因：默认不开 Markdown 输出，原因是该任务面向 registry 落账而不是正文成文。
+        目的：定义同行数据取数任务。
+        功能：让 agent 基于上一阶段确定的同行名单，通过 Tushare 生成同行数据 source。
+        实现逻辑：读取 `collect_peer_data` 配置，并显式把 `build_peer_list` 输出作为上下文接入。
+        可调参数：任务 YAML 内容、Tushare 工具和 `peer_data_source_output_path` 输入。
+        默认参数及原因：默认串行执行，原因是同行名单必须先确认，Tushare 才能稳定批量取数。
         """
 
+        task_config = dict(self.tasks_config["collect_peer_data"])  # type: ignore[index]
+        for key in ANALYSIS_PROFILE_KEYS:
+            task_config.pop(key, None)
         return Task(
-            config=strip_research_task_profile_fields(self.tasks_config["record_extract_registry"]),  # type: ignore[index]
-            context=[self.extract_file_facts()],
-            tools=self._registry_recording_tools(),
+            config=task_config,
+            agent=self.peer_data_agent(),
+            context=[self.build_peer_list()],
+            tools=[self.tushare_peer_data_tool],
             async_execution=False,
             output_json=None,
             output_pydantic=None,
             human_input=False,
             cache=True,
-            markdown=False,
-        )
-
-    @task
-    def search_facts(self) -> Task:
-        """
-        目的：定义专题的外部搜索候选采集任务。
-        功能：驱动 search agent 补足公开资料并产出候选 patch 报告。
-        实现逻辑：读取 `tasks.yaml` 中的 `search_facts` 配置，并依赖 `record_extract_registry` 已完成的落账结果。
-        可调参数：YAML task 配置。
-        默认参数及原因：默认不开结构化 JSON 输出，原因是任务主要通过候选 patch 文本交接给下游 record task。
-        """
-
-        return Task(
-            config=strip_research_task_profile_fields(self.tasks_config["search_facts"]),  # type: ignore[index]
-            context=[self.record_extract_registry()],
-            tools=self._search_tools(),
-            async_execution=False,
-            output_json=None,
-            output_pydantic=None,
-            human_input=False,
-            cache=True,
-            markdown=False,
-        )
-
-    @task
-    def record_search_registry(self) -> Task:
-        """
-        目的：定义专题的 search 结果登记与修订任务。
-        功能：把 `search_facts` 产出的候选 patch 报告优先回填到已有 registry 条目。
-        实现逻辑：复用 search agent，并把 `search_facts` 作为唯一上游上下文输入。
-        可调参数：YAML task 配置。
-        默认参数及原因：默认不开 Markdown 输出，原因是该任务面向 registry 落账而不是正文成文。
-        """
-
-        return Task(
-            config=strip_research_task_profile_fields(self.tasks_config["record_search_registry"]),  # type: ignore[index]
-            context=[self.search_facts()],
-            tools=self._registry_recording_tools(),
-            async_execution=False,
-            output_json=None,
-            output_pydantic=None,
-            human_input=False,
-            cache=True,
-            markdown=False,
-        )
-
-    @task
-    def check_registry(self) -> Task:
-        """
-        目的：定义专题的内部 QA 任务。
-        功能：检查两个 record 任务完成后的 registry 覆盖度和未关闭缺口。
-        实现逻辑：复用 `tasks.yaml` 配置，并把两个落账任务作为上游上下文传入。
-        可调参数：YAML task 配置和上下文依赖。
-        默认参数及原因：默认依赖两个 record 任务，原因是 QA 必须基于已落账状态检查闭环。
-        """
-
-        return Task(
-            config=strip_research_task_profile_fields(self.tasks_config["check_registry"]),  # type: ignore[index]
-            context=[self.record_extract_registry(), self.record_search_registry()],
-            tools=self._qa_tools(),
-            async_execution=False,
-            output_json=None,
-            output_pydantic=ResearchRegistryCheckResult,
-            human_input=False,
-            cache=True,
-            markdown=False,
+            markdown=True,
         )
 
     @task
     def synthesize_and_output(self) -> Task:
         """
-        目的：定义专题的最终只读综合输出任务。
-        功能：驱动 synthesizing agent 输出最终 Markdown 分析包。
-        实现逻辑：复用 `tasks.yaml` 配置，并把两个 record 结果和 QA 结果作为上游上下文传入。
-        可调参数：YAML task 配置和上下文依赖。
-        默认参数及原因：默认开启 Markdown 输出，原因是该任务直接产出下游复用的分析包文件。
+        目的：定义同行专题综合写作任务。
+        功能：等同行清单 source 和同行数据 source 都完成后，输出最终同行信息分析包。
+        实现逻辑：读取 `synthesize_and_output` 配置，并把前两步结果通过 `context` 接入综合阶段。
+        可调参数：任务 YAML 内容和 `pack_output_path` 输入。
+        默认参数及原因：默认串行执行，原因是综合写作必须建立在前两步已完成的前提上。
         """
 
+        task_config = dict(self.tasks_config["synthesize_and_output"])  # type: ignore[index]
+        for key in ANALYSIS_PROFILE_KEYS:
+            task_config.pop(key, None)
         return Task(
-            config=strip_research_task_profile_fields(self.tasks_config["synthesize_and_output"]),  # type: ignore[index]
-            context=[self.record_extract_registry(), self.record_search_registry(), self.check_registry()],
-            tools=self._synthesizing_tools(),
+            config=task_config,
+            agent=self.synthesizing_agent(),
+            context=[self.build_peer_list(), self.collect_peer_data()],
+            tools=[],
             async_execution=False,
             output_json=None,
             output_pydantic=None,
@@ -371,33 +247,32 @@ class PeerInfoCrew:
     @crew
     def crew(self) -> Crew:
         """
-        目的：输出专题最终使用的 research crew。
-        功能：汇总 4 个 worker agent 和 6 个 task，并交给 CrewAI 以 sequential process 运行。
-        实现逻辑：先确保日志目录存在，再返回按固定 task 顺序执行的 `Crew` 实例。
-        可调参数：日志路径、缓存、tracing 和固定 task 顺序。
-        默认参数及原因：默认采用 `Process.sequential`，原因是当前 research 子 crew 的顺序和上下文依赖已经显式写死。
+        目的：返回当前同行专题自己的 CrewAI runtime。
+        功能：固定组装 3 个 agent 和 3 个 task，维持“同行清单 -> 同行数据 -> 综合输出”的执行边界。
+        实现逻辑：显式在本文件里声明 `Crew(...)` 参数，而不是复用其他专题的 PDF/source 骨架。
+        可调参数：日志路径、task 列表、agent 列表以及后续可能追加的运行控制参数。
+        默认参数及原因：默认使用 `Process.sequential`，原因是三步之间存在明确前后依赖。
         """
 
         if isinstance(self.output_log_file_path, str):
             Path(self.output_log_file_path).parent.mkdir(parents=True, exist_ok=True)
+
         return Crew(
             name=self.crew_name,
             agents=[
-                self.extract_file_fact_agent(),
-                self.search_fact_agent(),
-                self.qa_check_agent(),
+                self.peer_list_agent(),
+                self.peer_data_agent(),
                 self.synthesizing_agent(),
             ],
             tasks=[
-                self.extract_file_facts(),
-                self.record_extract_registry(),
-                self.search_facts(),
-                self.record_search_registry(),
-                self.check_registry(),
+                self.build_peer_list(),
+                self.collect_peer_data(),
                 self.synthesize_and_output(),
             ],
             process=Process.sequential,
             verbose=True,
+            manager_llm=None,
+            manager_agent=None,
             function_calling_llm=None,
             config=None,
             max_rpm=None,

@@ -24,18 +24,6 @@ from automated_research_report_generator.flow.research_flow import ResearchRepor
 # 默认参数及原因：默认读取 `DEFAULT_PDF_PATH` 并执行 `kickoff()`，原因是更贴近日常本地运行。
 
 
-def default_inputs() -> dict[str, str]:
-    """
-    设计目的：集中定义命令行和脚本共用的默认输入。
-    模块功能：返回主流程启动时使用的最小输入字典。
-    实现逻辑：按当前定义的输入、处理和返回顺序执行，直接复用本函数或类里已经写好的步骤。
-    可调参数：当前只包含 `pdf_file_path`。
-    默认参数及原因：默认使用 `DEFAULT_PDF_PATH`，原因是方便本地直接运行。
-    """
-
-    return {"pdf_file_path": DEFAULT_PDF_PATH.as_posix()}
-
-
 class RunConsoleTranscript:
     """
     目的：把单次运行期间 PowerShell 终端里看到的原始输出统一转储到 run 目录日志中。
@@ -73,18 +61,6 @@ class RunConsoleTranscript:
         if not run_slug:
             return ""
         return run_console_log_path(run_slug)
-
-    def _fallback_log_path(self) -> str:
-        """
-        目的：在 run slug 迟迟拿不到时，为 transcript 提供最小可追踪的兜底落盘位置。
-        功能：返回 `.cache/_console_bootstrap_<label>/logs/console.txt`。
-        实现逻辑：先创建兜底目录，再返回标准化后的日志文件路径。
-        可调参数：当前无显式参数。
-        默认参数及原因：默认只在异常早退时使用兜底路径，原因是常规路径仍应严格落在实际 run 目录下。
-        """
-
-        fallback_dir = ensure_directory(CACHE_ROOT / f"_console_bootstrap_{self._fallback_label}" / "logs")
-        return normalize_path(fallback_dir / "console.txt")
 
     def _flush_buffer_locked(self, log_path: str) -> None:
         """
@@ -130,7 +106,11 @@ class RunConsoleTranscript:
         """
 
         with self._lock:
-            log_path = self._resolve_run_log_path() or self._active_log_path or self._fallback_log_path()
+            fallback_log_path = normalize_path(
+                ensure_directory(CACHE_ROOT / f"_console_bootstrap_{self._fallback_label}" / "logs")
+                / "console.txt"
+            )
+            log_path = self._resolve_run_log_path() or self._active_log_path or fallback_log_path
             self._flush_buffer_locked(log_path)
             self._active_log_path = log_path
             return log_path
@@ -220,19 +200,39 @@ def _console_fallback_label(inputs: dict[str, str]) -> str:
     return stem or "unknown"
 
 
+def _try_reconfigure_utf8_stream(stream: TextIO | object) -> None:
+    """
+    设计目的：尽量把当前控制台流切到 UTF-8，减少 Windows 默认 GBK 下的日志编码异常。
+    模块功能：对支持 `reconfigure()` 的标准流尝试改成 UTF-8，并把错误字符降级为 replace。
+    实现逻辑：先探测 `reconfigure` 能力，再在支持时执行最小重配置；不支持时静默跳过。
+    可调参数：`stream`。
+    默认参数及原因：默认使用 `errors="replace"`，原因是终端日志宁可保留大意，也不要因为 emoji 中断输出。
+    """
+
+    reconfigure = getattr(stream, "reconfigure", None)
+    if not callable(reconfigure):
+        return
+    try:
+        reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        return
+
+
 def kickoff(inputs: dict[str, str] | None = None):
     """
     设计目的：统一流程启动入口。
     模块功能：合并默认输入与外部参数，再执行 `ResearchReportFlow.kickoff()`。
     实现逻辑：按当前定义的输入、处理和返回顺序执行，直接复用本函数或类里已经写好的步骤。
     可调参数：`inputs`。
-    默认参数及原因：先加载默认输入，原因是命令行、脚本和测试都能复用同一套入口。
+    默认参数及原因：默认补上 `DEFAULT_PDF_PATH`，原因是命令行、脚本和测试都能复用同一套入口。
     """
 
-    merged_inputs = default_inputs()
+    merged_inputs = {"pdf_file_path": DEFAULT_PDF_PATH.as_posix()}
     if inputs:
         merged_inputs.update(inputs)
     reset_runtime_logging_state()
+    _try_reconfigure_utf8_stream(sys.stdout)
+    _try_reconfigure_utf8_stream(sys.stderr)
     flow = ResearchReportFlow()
     transcript = RunConsoleTranscript(
         run_slug_getter=lambda: getattr(flow.state, "run_slug", ""),
@@ -283,7 +283,7 @@ def _parse_args() -> argparse.Namespace:
     模块功能：解析 PDF 路径和是否绘图两个参数。
     实现逻辑：按当前定义的输入、处理和返回顺序执行，直接复用本函数或类里已经写好的步骤。
     可调参数：`--pdf` 与 `--plot`。
-    默认参数及原因：默认沿用 `DEFAULT_PDF_PATH`，原因是和 `default_inputs()` 保持一致。
+    默认参数及原因：默认沿用 `DEFAULT_PDF_PATH`，原因是和 `kickoff()` 的默认输入保持一致。
     """
 
     parser = argparse.ArgumentParser(description="Run the CrewAI v2 research-report flow.")

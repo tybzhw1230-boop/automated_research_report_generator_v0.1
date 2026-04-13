@@ -457,7 +457,7 @@ class ReadPdfPageIndexTool(BaseTool):
     默认参数及原因：默认返回全量索引，原因是先看全局再缩小范围更稳妥。
     """
 
-    name: str = "Step 1 - Read PDF Page Index"
+    name: str = "read_pdf_page_index"
     description: str = (
         "Read the current PDF page index JSON. Always call this first before reading any PDF page."
         " Use the page-by-page topic list to decide which exact pages are relevant to the current task. "
@@ -509,7 +509,7 @@ class ReadPdfPagesTool(BaseTool):
     默认参数及原因：默认按页分段输出，原因是引用证据时更容易定位来源页码。
     """
 
-    name: str = "Step 2 - Read Relevant PDF Pages"
+    name: str = "read_pdf_pages"
     description: str = (
         "Read the full extracted text of specific PDF pages directly, without RAG. "
         "Use this only after reading the page index and only request the pages relevant to your task. "

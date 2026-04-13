@@ -1,0 +1,51 @@
+generate_diligence_questions:
+  description: |
+    基于 {company_name} 的 7 个专题 pack 和 1 份跨专题风险分析中间产物，生成优先级尽调问题清单。
+    输入：
+    - 历史与背景分析包：
+      {history_background_pack_text}
+    - 行业分析包：
+      {industry_pack_text}
+    - 业务分析包：
+      {business_pack_text}
+    - 同行信息分析包：
+      {peer_info_pack_text}
+    - 财务分析包：
+      {finance_pack_text}
+    - 经营指标分析包：
+      {operating_metrics_pack_text}
+    - 风险分析包：
+      {risk_pack_text}
+    - 风险跨专题分析中间结果：
+      {risk_search_source_text}
+    - 输出路径：{diligence_output_path}
+
+    执行要求：
+    - 只基于 pack 和已提供的风险跨专题分析中间结果提问。
+    - 各专题 pack 是主输入，负责承载已经整理好的结论；`risk_search_source_text` 只用于补充跨专题风险传导、证据强弱和待监控信号。
+    - 优先抓住“回答后会显著改变投资判断”的未知点、冲突点和证据薄弱点。
+    - 对每个问题，明确它对应的假设、风险、冲突或缺口。
+    - 优先处理跨专题彼此矛盾、以及 pack 结论与风险跨专题分析不一致的地方。
+    - 你的职责是识别最值得问的验证点，而不是重做专题研究或回到原始材料逐条核对。
+    - 如果信息已经足够清晰，不要为了凑数制造问题。
+    - 输出必须可直接给管理层、IR 或行业专家访谈使用。
+  expected_output: |
+    严格按以下模板输出，不增删标题。
+    # {company_name} 尽调问题包
+    ## 1. 高优先级问题
+    | 优先级 | 问题 | 对应假设/风险/冲突 | 为什么重要 | 建议向谁确认 |
+    | --- | --- | --- | --- | --- |
+    | P1 |  |  |  |  |
+    | P1 |  |  |  |  |
+    | P1 |  |  |  |  |
+
+    ## 2. 次优先级问题
+    | 优先级 | 问题 | 对应假设/风险/冲突 | 为什么重要 | 建议向谁确认 |
+    | --- | --- | --- | --- | --- |
+    | P2 |  |  |  |  |
+    | P2 |  |  |  |  |
+
+    ## 3. 暂未纳入本轮尽调的缺口
+    - 说明哪些缺口存在，但当前优先级不足以纳入本轮核心尽调。
+  agent: due_diligence_agent
+  output_file: "{diligence_output_path}"

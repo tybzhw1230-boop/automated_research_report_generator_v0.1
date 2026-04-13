@@ -2,67 +2,113 @@
 
 ## 目的
 
-这份文件给后续 agent 会话做续接说明。
-先读 `AGENTS.md`，再读本文件，再决定下一步操作。
+这份文件给后续 agent 会话做续接说明。先读 `AGENTS.md`，再读本文件，再决定下一步操作。
 
-本版 handoff 更新时间：`2026-04-11`。
-它反映当前工作区真实结构，而不是更早那套带 planning crew 的设计稿。
+本版 handoff 更新时间：`2026-04-16`。
+它反映的是当前 `v0.3` source-based 主链的真实工作区状态，不再描述旧的 registry / gathering runtime。
 
 ## 仓库快照
 
-- 本地目录：`D:\pyproject\automated_research_report_generator_v0.2`
-- 当前分支：`main-v0.2`
-- 当前 `HEAD`：`35c3c8f5b9370bc0d8459fa113e85c373bca5491`
-- 最近提交：`35c3c8f Document planner refactor and align writeup outline`
-- 远端仓库：`https://github.com/tybzhw1230-boop/automated_research_report_generator_v0.1`
+- 本地目录：`D:\pyproject\automated_research_report_generator_v0.3`
+- 当前分支：`main-v0.3`
 - 当前包名：`automated_research_report_generator`
-- 当前版本：`0.2.0`
+- 当前目标版本：`v0.3`
+- 当前 `pyproject.toml` 版本基线：`0.2.0`
 - 当前 CrewAI 依赖：`crewai[file-processing,google-genai,litellm,tools]==1.14.1`
 - 当前项目类型：`[tool.crewai].type = "flow"`
+- 当前运行目录类型保持为：`.cache/<run_slug>/md/...`
 
-## 当前真实工作状态
+## 当前真实边界
 
-当前工作区不是干净状态，文档、research sub-crew 配置和 flow/registry 相关文件都还在持续收敛。
-不要把最近一次提交当成“唯一真相”，也不要把旧设计稿当成当前接口。
+当前已经落地的核心变化：
 
-当前已经明确落地的变化有：
+- 顶层 Flow 固定为：
+  - `prepare_evidence`
+  - `run_analysis_phase`
+  - `run_valuation_crew`
+  - `run_investment_thesis_crew`
+  - `publish_if_passed`
+- 旧的 runtime 依赖已经移除：
+  - `registry`
+  - `gathering_crew`
+  - `gathering_dispatcher`
+  - `registry_template.yaml`
+- analysis 主链保持 source-based，但专题内允许最小中间产物：
+  - 多数专题仍是 `extract_from_pdf` / `search_public_sources` / `synthesize_and_output`
+  - `financial_crew` 额外产出 `finance_computed_metrics` 与 `finance_analysis`
+  - `operating_metrics_crew` 额外产出 `operating_metrics_analysis`
+- `DueDiligenceCrew` 已经并入 analysis 末尾
+- `entry_id` 仍保留，但只保留在专题 source md 中，不再承担 registry 状态管理职责
+- 最终报告附录固定拼入 `sources/` 目录下的 14 份 source md 全文，不再拼 `registry_snapshot.md`
+- `main.py` 会把 stdout / stderr transcript 写到 `.cache/<run_slug>/logs/console.txt`
 
-- `planning_crew` 已经移除
-- planning 已改成固定模板初始化，不再生成 `research_scope`、`question_tree`、`seed_evidence_map`
-- registry 已切到新的 `entry` 字段体系
-- research 阶段改为内部 `check_registry` 汇总，不再走外部 QA gate
-- 运行产物主路径已经切到 `.cache/<run_slug>/`
+## 当前 Flow 行为
 
-继续工作前，必须先区分三件事：
+1. `prepare_evidence`
+   - 识别 PDF 元数据
+   - 创建 `.cache/<run_slug>/md/` 与 `.cache/<run_slug>/logs/`
+   - 生成页索引
+   - 保存 document metadata JSON
+   - 刷新 `run_manifest.json`
+   - 生成 `cp00_prepared`
+2. `run_analysis_phase`
+   - 顺序执行 7 个专题 crew
+   - 在 `.cache/<run_slug>/md/research/iter_01/sources/` 下生成 14 份 source md
+   - 在 `.cache/<run_slug>/md/research/iter_01/` 下额外生成：
+     - `05_finance_analysis.md`
+     - `06_operating_metrics_analysis.md`
+   - 生成 7 个专题 pack
+   - 末尾执行 `DueDiligenceCrew`
+   - 产出 `08_diligence_questions.md`
+   - 生成 `cp03a` 到 `cp03h`
+3. `run_valuation_crew`
+   - 读取 4 个 pack：
+     - `peer_info`
+     - `finance`
+     - `operating_metrics`
+     - `risk`
+   - 额外读取：
+     - `peer_info_peer_data_source_text`
+     - `risk_search_source_text`
+   - 产出：
+     - `01_peers_pack.md`
+     - `02_intrinsic_value_pack.md`
+     - `03_valuation_pack.md`
+   - 生成 `cp04_valuation`
+4. `run_investment_thesis_crew`
+   - 继续读取 7 个 analysis packs、3 个 valuation packs 和 `08_diligence_questions.md`
+   - 不额外读取 source md
+   - 产出：
+     - `01_bull_thesis.md`
+     - `02_neutral_thesis.md`
+     - `03_bear_thesis.md`
+     - `04_investment_thesis.md`
+   - 生成 `cp05_thesis`
+5. `publish_if_passed`
+   - Flow 先拼最终 Markdown
+   - 正文固定覆盖 thesis、尽调问题、7 个 analysis packs、3 个 valuation packs
+   - 附录固定拼入 `sources/` 目录下的 14 份 source md 全文
+   - `WriteupCrew` 只做确认和 PDF 导出
+   - 生成 `cp06_writeup`
 
-- 当前 `HEAD` 代表什么
-- 当前 working tree 多了什么
-- 哪些 design doc 只是历史讨论，不是现行结构
+## 当前目录约定
 
-## 当前代码的真实目录约定
+入口层：
 
-以 working tree 当前代码为准，目录边界已经稳定为：
+- `src/automated_research_report_generator/main.py`
+- `src/automated_research_report_generator/llm_config.py`
 
-- 入口：`src/automated_research_report_generator/main.py`
-- LLM 配置：`src/automated_research_report_generator/llm_config.py`
-- Flow 层：`src/automated_research_report_generator/flow/`
-- Crew 层：`src/automated_research_report_generator/crews/`
-- Tool 层：`src/automated_research_report_generator/tools/`
-- 测试层：`test_src/`
+Flow 层：
 
-`flow/` 下当前核心模块：
+- `src/automated_research_report_generator/flow/common.py`
+- `src/automated_research_report_generator/flow/document_metadata.py`
+- `src/automated_research_report_generator/flow/models.py`
+- `src/automated_research_report_generator/flow/pdf_indexing.py`
+- `src/automated_research_report_generator/flow/research_flow.py`
 
-- `common.py`
-- `document_metadata.py`
-- `models.py`
-- `pdf_indexing.py`
-- `registry.py`
-- `research_flow.py`
-- `config/registry_template.yaml`
+Crew 层：
 
-`crews/` 下当前真实存在的目录：
-
-- research sub-crews
+- 7 个专题 crew：
   - `history_background_crew`
   - `industry_crew`
   - `business_crew`
@@ -70,162 +116,154 @@
   - `financial_crew`
   - `operating_metrics_crew`
   - `risk_crew`
-- 后续阶段 crews
+- 其它运行时 crew：
+  - `due_diligence_crew`
   - `valuation_crew`
   - `investment_thesis_crew`
   - `writeup_crew`
 
-当前不再存在：
+Tool 层：
 
-- `src/automated_research_report_generator/crews/planning_crew/`
-- `src/automated_research_report_generator/crews/qa_crew/`
-- `src/automated_research_report_generator/crews/research_subcrew_base.py`
+- `src/automated_research_report_generator/tools/`
 
-## 当前接口边界
+测试层：
 
-当前只应把下面这些当作真实接口：
+- `test_src/`
 
-- Flow 主类：`ResearchReportFlow`
-- registry 模型：`fact/data/judgment` + `single/table` + `unchecked/checked/need_revision`
-- registry 工具：
-  - `add_entry`
-  - `update_entry`
-  - `add_evidence`
-  - `status_update`
-  - `registry_review`
-  - `read_registry`
-- 主入口参数：
-  - `--pdf`
-  - `--plot`
+## 当前 source 与中间产物边界
 
-下面这些旧接口已经退出主路径，不要再在文档、prompt 或测试假设里当成当前实现：
+`sources/` 目录固定放 14 份 source md：
 
-- `planning_crew`
-- `research_scope`
-- `question_tree`
-- `seed_evidence_map`
-- `RegistrySeedPlan`
-- `RegistrySeedTool`
-- 旧 registry 状态：`open`、`supported`、`gap`、`conflicted`、`deferred`、`closed`
-- 项目级 `latest_run.json`
+- `01_history_background_file_source.md`
+- `01_history_background_search_source.md`
+- `02_industry_file_source.md`
+- `02_industry_search_source.md`
+- `03_business_file_source.md`
+- `03_business_search_source.md`
+- `04_peer_info_peer_list.md`
+- `04_peer_info_peer_data.md`
+- `05_finance_file_source.md`
+- `05_finance_computed_metrics.md`
+- `06_operating_metrics_file_source.md`
+- `06_operating_metrics_search_source.md`
+- `07_risk_file_source.md`
+- `07_risk_search_source.md`
 
-## 当前 Flow 行为摘要
+analysis 目录额外保留：
 
-当前主流程是：
+- `05_finance_analysis.md`
+- `06_operating_metrics_analysis.md`
+- `08_diligence_questions.md`
 
-1. `prepare_evidence`
-   - 识别 PDF 元数据
-   - 创建 run 目录
-   - 生成页索引
-   - 初始化 registry
-2. `build_research_plan`
-   - 读取 `flow/config/registry_template.yaml`
-   - 用 `{company_name}`、`{industry}` 做占位符替换
-   - 把模板条目写回当前 run 的 registry
-3. `run_research_crew`
-   - 顺序执行 7 个 research sub-crews
-   - 产出 7 个 research packs
-   - 汇总 7 个 `check_registry` 输出，生成 `08_research_internal_registry_checks.md`
-4. `run_valuation_crew`
-   - research 完成后直接进入 valuation
-   - 产出 `peers_pack`、`intrinsic_value_pack`、`valuation_pack`
-5. `run_investment_thesis_crew`
-   - 产出 `investment_thesis`、`diligence_questions`
-   - 可读取完整 registry 快照
-6. `publish_if_passed`
-   - 先由 flow 确定性拼装最终 Markdown
-   - 主文完整纳入 thesis、7 个 research packs、3 个 valuation packs 和内部校验摘要
-   - 末尾以附录方式追加 `registry_snapshot.md`
-   - 再调用 writeup crew 做非破坏性确认与 PDF 导出
+固定结构：
 
-当前校验规则：
+- source md 必须保留 `entry_id`
+- 每条都要有：
+  - `问题`
+  - `期望输出`
+  - `输出内容`
+  - `状态`
+- 允许输出：
+  - `无信息`
 
-- `research` 阶段不再保留外部 gate
-- 7 个 research sub-crews 各自保留内部 `check_registry` 任务
-- 7 个 research sub-crews 在 crew 内统一使用 `Process.sequential`，不再依赖 manager agent 转派任务
-- Flow 会把 7 个 `check_registry` 输出汇总成 `08_research_internal_registry_checks.md`
-- `check_registry` 的 `ready/not_ready` 只用于内部校验摘要和结论边界，不阻断 valuation / thesis / writeup
-- `check_registry` 优先返回结构化 JSON；结构化结果缺失时，Flow 会降级到原始 memo 解析并记录 warning
-- valuation 和 thesis 的校验都已经内收到各自 crew 或下游综合阶段
+## 当前下游输入边界
 
-## 当前运行时真相
+- `DueDiligenceCrew`
+  - 读取 7 个专题 pack
+  - 额外读取 `risk_search_source_text`
+  - 不再回读其它 source md
+- `ValuationCrew`
+  - 读取 4 个专题 pack
+  - 额外读取 `peer_info_peer_data_source_text`
+  - 额外读取 `risk_search_source_text`
+  - 不再回读其它 source md
+- `InvestmentThesisCrew`
+  - 继续只读 7 个 analysis packs + 3 个 valuation packs + diligence
+- `Writeup`
+  - 只消费最终 Markdown 路径与 PDF 输出路径
+  - 不负责重写正文
 
-单次运行根目录：
+## 当前运行时产物
+
+单次 run 根目录：
 
 - `.cache/<run_slug>/`
 
-其中的关键目录：
+关键目录与文件：
 
-- `indexing/`
-  - 文档元数据和页索引都落在这里
-- `logs/`
-  - `preprocess.txt`
-  - `flow.txt`
-  - 各 crew 独立日志
-- `md/`
-  - `research/iter_XX/`
-  - `valuation/iter_XX/`
-  - `thesis/iter_XX/`
-  - `registry/`
-  - `checkpoints/`
-  - `run_manifest.json`
-  - 最终 `.md` 与 `.pdf`
+- `.cache/<run_slug>/indexing/`
+- `.cache/<run_slug>/logs/preprocess.txt`
+- `.cache/<run_slug>/logs/flow.txt`
+- `.cache/<run_slug>/logs/console.txt`
+- `.cache/<run_slug>/logs/history_background_crew.txt`
+- `.cache/<run_slug>/logs/industry_crew.txt`
+- `.cache/<run_slug>/logs/business_crew.txt`
+- `.cache/<run_slug>/logs/peer_info_crew.txt`
+- `.cache/<run_slug>/logs/financial_crew.txt`
+- `.cache/<run_slug>/logs/operating_metrics_crew.txt`
+- `.cache/<run_slug>/logs/risk_crew.txt`
+- `.cache/<run_slug>/logs/due_diligence_crew.txt`
+- `.cache/<run_slug>/logs/valuation_crew.txt`
+- `.cache/<run_slug>/logs/investment_thesis_crew.txt`
+- `.cache/<run_slug>/logs/writeup_crew.txt`
+- `.cache/<run_slug>/md/research/iter_01/`
+- `.cache/<run_slug>/md/research/iter_01/sources/`
+- `.cache/<run_slug>/md/research/iter_01/05_finance_analysis.md`
+- `.cache/<run_slug>/md/research/iter_01/06_operating_metrics_analysis.md`
+- `.cache/<run_slug>/md/research/iter_01/08_diligence_questions.md`
+- `.cache/<run_slug>/md/valuation/iter_01/`
+- `.cache/<run_slug>/md/thesis/iter_01/`
+- `.cache/<run_slug>/md/checkpoints/`
+- `.cache/<run_slug>/md/run_manifest.json`
+- `.cache/<run_slug>/md/<pdf_stem>_v2_report.md`
+- `.cache/<run_slug>/md/<pdf_stem>_v2_report.pdf`
 
-关键文件：
+`run_manifest.json` 当前重点字段：
 
-- 证据注册表：`.cache/<run_slug>/md/registry/evidence_registry.json`
-- registry 快照：`.cache/<run_slug>/md/registry/registry_snapshot.md`
-- registry 历史快照：`.cache/<run_slug>/md/registry/snapshots/`
-- checkpoints：`.cache/<run_slug>/md/checkpoints/cpXX_*.json`
-- 运行索引：`.cache/<run_slug>/md/run_manifest.json`
-- 最终报告：`.cache/<run_slug>/md/<pdf_stem>_v2_report.md`
-- 最终 PDF：`.cache/<run_slug>/md/<pdf_stem>_v2_report.pdf`
+- `run_root_dir`
+- `run_cache_dir`
+- `run_artifact_dir`
+- `run_log_dir`
+- `analysis_source_dir`
+- `analysis_source_paths`
+- `page_index_file_path`
+- `document_metadata_file_path`
+- `diligence_questions_path`
+- `investment_thesis_path`
+- `final_report_markdown_path`
+- `final_report_pdf_path`
+- `console_log_file_path`
+- `crew_log_paths`
+- `failed_stage`
+- `failed_crew`
+- `error_message`
 
-补充说明：
+## 当前验证状态
 
-- 当前正式运行主路径不是仓库根目录 `output/`
-- 当前代码里没有项目级 `logs/latest_run.json` 或类似 latest 索引
-- `run_manifest.json` 已经承担单轮运行索引职责
+截至 `2026-04-16`，已完成的验证：
 
-## 文档状态
+- 当前 Flow 主链与 `README.md` / `AGENTS.md` / `PROJECT_HANDOFF.md` 已完成对齐
+- 当前目录骨架仍保持 `.cache/<run_slug>/md/...`
+- `uv run python -c "from automated_research_report_generator.flow.research_flow import ResearchReportFlow; print('ok')"`
+  - 结果：`ok`
+- `uv run pytest -q test_src`
+  - 结果：`34 passed, 1 skipped`
+  - 备注：存在 CrewAI 上游的 deprecation warnings，但当前没有测试失败
 
-当前优先信任这些文档：
+当前没有已知的结构级 blocker。
 
-- `AGENTS.md`
-- `PROJECT_HANDOFF.md`
-- `README.md`
-- `design_docs/项目信息传递链路全面分析.md`
-- `design_docs/CREW_REFACTOR_WORKING_DRAFT.md`
-
-这些文档如果发生以下变更，必须同步更新：
-
-- Flow 主链路变化
-- registry 字段体系变化
-- 运行目录或产物目录变化
-- crew 目录结构变化
-- 旧接口被彻底删除或重新引入
-
-`design_docs/next_step_20260410.md` 当前属于路线图，不代表已经落地。
-
-## 建议的恢复顺序
-
-后续会话继续工作时，建议按这个顺序恢复：
+## 恢复工作时的优先顺序
 
 1. 读 `AGENTS.md`
-2. 读本文件
+2. 读 `PROJECT_HANDOFF.md`
 3. 看 `git status --short --branch`
-4. 分开看 `git diff --cached` 和 `git diff`
-5. 看 `pyproject.toml`
-6. 看 `README.md`
-7. 看 `design_docs/项目信息传递链路全面分析.md`
-8. 如果要处理后续设计方向，再看 `design_docs/next_step_20260410.md`
-9. 如涉及结构调整，先做一次导入级 smoke test，确认 `automated_research_report_generator.flow` 路径没有断
+4. 看 `pyproject.toml`
+5. 看 `README.md`
+6. 如需设计背景，再看 `design_docs/delightful-imagining-hamming.md`
 
-## 本次 handoff 的边界
+## 下一步建议
 
-这次 handoff 之后，当前已确认的边界是：
-
-- deterministic planner 已经落地，模板文件是 `flow/config/registry_template.yaml`
-- 7 个 research sub-crews、统一 registry entry 模型、research 内部校验摘要和 checkpoint 机制已经落地
-- registry/tool 链路上的旧 question-style 兼容接口已移除，当前以 `entry` 命名为准
-- `planning_crew` 已删除，不应再作为当前结构展示
+- 如果继续做 v0.3，默认基于当前 source-based 主链扩展，不要恢复旧 registry / gathering 设计
+- 如果要调整专题输出形状，优先改各专题 crew 的 `tasks.yaml`
+- 如果要调估值输入边界，优先改 `flow/research_flow.py` 和 `crews/valuation_crew/config/tasks.yaml`
+- 如果改了运行目录、日志或最终报告结构，必须同步更新 `README.md`、`PROJECT_HANDOFF.md` 和 `AGENTS.md`

@@ -31,11 +31,11 @@ from automated_research_report_generator.tools.pdf_page_tools import (
 
 PAGE_INDEX_AGENT_ROLE = "PDF 页面主题索引专员"
 PAGE_INDEX_AGENT_GOAL = (
-    "逐页阅读 PDF，为每一页生成 15 字以内的主题概括，并从固定主题字典中选择 1 到 2 个最接近的主题。"
+    "逐页阅读 PDF，为每一页生成 30 字以内的主题概括，概括里要带上该页的内容主题和页面类型，并从固定主题字典中选择 1 到 2 个最接近的主题。"
 )
 PAGE_INDEX_AGENT_BACKSTORY = (
     "你专门负责把长 PDF 拆成可检索的页面主题索引。"
-    "你不写长分析，只输出结构稳定、便于筛页的主题概括和主题归类。"
+    "你不写长分析，只输出结构稳定、便于筛页、能体现页面内容类型的主题概括和主题归类。"
 )
 PAGE_INDEX_AGENT_TEMPERATURE = 0.1
 PAGE_INDEX_AGENT_VERBOSE = True
@@ -45,13 +45,13 @@ PAGE_INDEX_AGENT_CACHE = True
 PAGE_INDEX_AGENT_TIMEOUT_SECONDS = 20
 PAGE_INDEX_AGENT_MAX_RETRIES = 5
 
-PAGE_INDEX_TOPIC_MAX_CHARS = 15
+PAGE_INDEX_TOPIC_MAX_CHARS = 30
 PAGE_INDEX_MATCHED_TOPICS_MAX_COUNT = 2
 PAGE_INDEX_UNKNOWN_COMPANY = "未知公司"
 PAGE_INDEX_EMPTY_PAGE_TOPIC = "空白页"
 PAGE_INDEX_EMPTY_PAGE_MATCHED_TOPICS = ["其他"]
 PAGE_INDEX_FORCE_REBUILD_DEFAULT = False
-PAGE_INDEX_MAX_CONCURRENCY_DEFAULT = 500  # 最大并发数量当前设为 500，优先提升整份 PDF 的处理速度。
+PAGE_INDEX_MAX_CONCURRENCY_DEFAULT = 100  # 默认并发保持 100，优先在处理速度与稳定性之间取平衡。
 PAGE_INDEX_RETRY_LIMIT_DEFAULT = 2
 PAGE_INDEX_RETRY_BASE_DELAY_SECONDS = 2.0
 PAGE_INDEX_ALLOWED_TOPICS = (
@@ -77,6 +77,7 @@ PAGE_INDEX_ALLOWED_TOPICS = (
 )
 PAGE_INDEX_PROMPT_RULES = (
     f"给出一个中文短概括，长度不超过 {PAGE_INDEX_TOPIC_MAX_CHARS} 个字。",
+    "短概括里要同时体现这一页的内容主题，以及它更像数据表、正文说明、目录、声明还是封面等页面类型。",
     f"再从固定主题字典里选 1 到 {PAGE_INDEX_MATCHED_TOPICS_MAX_COUNT} 个最接近的主题。",
     "主题不要重复，不要自造新主题。",
     "只输出一个 JSON 对象，不要输出解释、前后缀或 Markdown 代码块。",
@@ -223,7 +224,7 @@ def _normalize_topic(topic: str, fallback: str) -> str:
     模块功能：去掉多余空白和无意义包裹符号，并在为空时回退到兜底概括。
     实现逻辑：先压缩空白，再做轻量清洗，最后做空值兜底和长度裁剪。
     可调参数：原始概括和兜底概括。
-    默认参数及原因：最终长度裁剪到 15 个字，原因是这里强调短概括而不是完整摘要。
+    默认参数及原因：最终长度裁剪到 30 个字，原因是 v0.3 需要更清楚的页面定位信息，但仍要保持索引足够短。
     """
 
     normalized = " ".join((topic or "").split())
@@ -448,32 +449,6 @@ def build_page_topic_task_prompt(
     return "\n".join(prompt_parts).strip()
 
 
-def create_page_indexer_agent() -> Agent:
-    """
-    设计目的：集中管理页面索引 agent 的构造逻辑。
-    模块功能：按模块常量创建一个稳定的逐页主题摘要 agent。
-    实现逻辑：把角色、目标、LLM 参数和容错参数统一封装在这里。
-    可调参数：由模块常量控制 temperature、timeout、retry 和 reasoning。
-    默认参数及原因：默认低温度且不启用 reasoning，原因是这里追求稳定归纳而不是开放式推理。
-    """
-
-    return Agent(
-        role=PAGE_INDEX_AGENT_ROLE,
-        goal=PAGE_INDEX_AGENT_GOAL,
-        backstory=PAGE_INDEX_AGENT_BACKSTORY,
-        llm=get_heavy_llm(
-            temperature=PAGE_INDEX_AGENT_TEMPERATURE,
-            timeout=PAGE_INDEX_AGENT_TIMEOUT_SECONDS,
-            max_retries=PAGE_INDEX_AGENT_MAX_RETRIES,
-        ),
-        verbose=PAGE_INDEX_AGENT_VERBOSE,
-        allow_delegation=PAGE_INDEX_AGENT_ALLOW_DELEGATION,
-        reasoning=PAGE_INDEX_AGENT_REASONING,
-        cache=PAGE_INDEX_AGENT_CACHE,
-        max_retry_limit=PAGE_INDEX_AGENT_MAX_RETRIES,
-    )
-
-
 def summarize_page_topic(
     page_number: int,
     page_text: str,
@@ -510,7 +485,21 @@ def summarize_page_topic(
     for attempt in range(retry_limit + 1):
         started_at = perf_counter()
         try:
-            agent = create_page_indexer_agent()
+            agent = Agent(
+                role=PAGE_INDEX_AGENT_ROLE,
+                goal=PAGE_INDEX_AGENT_GOAL,
+                backstory=PAGE_INDEX_AGENT_BACKSTORY,
+                llm=get_heavy_llm(
+                    temperature=PAGE_INDEX_AGENT_TEMPERATURE,
+                    timeout=PAGE_INDEX_AGENT_TIMEOUT_SECONDS,
+                    max_retries=PAGE_INDEX_AGENT_MAX_RETRIES,
+                ),
+                verbose=PAGE_INDEX_AGENT_VERBOSE,
+                allow_delegation=PAGE_INDEX_AGENT_ALLOW_DELEGATION,
+                reasoning=PAGE_INDEX_AGENT_REASONING,
+                cache=PAGE_INDEX_AGENT_CACHE,
+                max_retry_limit=PAGE_INDEX_AGENT_MAX_RETRIES,
+            )
             result = agent.kickoff(prompt)
             parsed_topic, parsed_topics = _extract_page_summary_from_result(
                 result=result,
@@ -632,4 +621,3 @@ def reset_pdf_preprocessing_runtime_state() -> None:
     """
 
     reset_pdf_page_tool_runtime_state()
-

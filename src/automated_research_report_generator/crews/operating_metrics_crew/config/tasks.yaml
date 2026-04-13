@@ -1,190 +1,175 @@
-extract_file_facts:
-  extract_guidance: 从 PDF 中提取产能、产量、利用率、在手订单、交付周期、客户数量和 ASP 等指标线索；注意区分披露口径和时间范围。
+extract_from_pdf:
   description: |-
-    围绕 {company_name} 的 {pack_title} 执行 PDF 候选采集任务。
-
+    请为 {company_name} 的运营指标分析包生成 File Source Markdown。
     输入：
     - PDF 文件路径：{pdf_file_path}
-    - 页面索引文件路径：{page_index_file_path}
-    - 当前专题焦点：{pack_focus}
-    - 返工反馈：{qa_feedback}
-    - 上游同行信息分析包：{peer_info_pack_text}
+    - 页码索引路径：{page_index_file_path}
+    - 行业分析包文本：{industry_pack_text}
+    - 输出路径：{file_source_output_path}
 
     执行要求：
-    - 先读取页码索引，再有选择地读取相关页面，不要通读全文。
-    - {extract_guidance}
-    - 先用 `read_registry` 按 `owner_crew="{owner_crew}"` 读取当前 crew 的条目清单，优先关注 `unchecked / need_revision` 的 `high / medium` 条目。
-    - 只处理当前 crew 负责的条目和与之直接相关的新发现，不要越权补写其他 pack。
-    - 如果 `qa_feedback` 非空，优先回应其中属于文件提取、原文核对和页码补证的缺口；被标成 `need_revision` 的条目要结合 `revision_detail` 输出定向修订建议。
-    - 你的职责是生成“候选 patch 报告”，而不是直接调用 `update_entry`、`add_entry`、`add_evidence` 或 `status_update`。
-    - 对每个候选更新，优先匹配已有 `entry_id`，明确写出拟更新字段、原文摘录、页码或章节位置、时间口径和置信度；只有确认现有条目没有语义匹配槽位时，才把它列入 `new_entry_candidates`。
-    - 如果 PDF 原文与外部资料或现有判断冲突，必须写清冲突来源、冲突点和当前判断，不能静默忽略。
-    - 如果在 PDF 中无法提取到可靠信息，明确写“未提取到信息”，并把缺口归入 `unresolved_gaps`。
-    - 任务结束时只输出供 `record_extract_registry` 落账的候选 patch 报告，不直接写 registry。
-  expected_output: |-
-    面向 manager 和后续 record task 的候选 patch 报告，必须严格包含以下三段：
-    1. `existing_entry_updates`：逐条列出建议 amend 的 `entry_id`、拟更新字段、建议值、来源摘要、时间口径、置信度，以及是否涉及冲突。
-    2. `new_entry_candidates`：仅列出确认没有现有语义匹配槽位的新增候选，写明建议 `entry_type`、标题、核心内容、来源摘要和为什么不能并入旧条目。
-    3. `unresolved_gaps`：列出仍未解决的缺口、缺失原因、建议下一步走 `extract` 还是 `search`，以及是否影响后续综合输出。
-  agent: extract_file_fact_agent
-record_extract_registry:
+    - 先读取 PDF 页面索引，再按需读取相关页面。
+    - 第一步必须先从 PDF 中提取公司已披露的 operating metrics，不要先空想行业指标。
+    - 第二步再根据已提取出的公司指标认知和 `industry_pack_text`，补充该行业其他关键的 operating metrics。
+    - 结果至少覆盖 5 个核心 operating metrics；如公司自身披露不足 5 个，用行业关键指标补足，但要明确区分“已披露”和“未披露但应关注”。
+    - 严格按照 expected_output 的 ENTRY 结构输出，并保留 entry_id。
+    - 只输出 Markdown 正文，不要输出最终 pack。
+    - 如果没有信息，也必须保留 entry_id，并明确写“无信息”或“未披露”。
+  expected_output: |
+    # {company_name} 运营指标分析包 File Source
+
+    ## ENTRY D_OPS_001
+    - 问题：公司已披露 operating metrics 提取与整理
+    - 期望输出：请直接按下列 Markdown 表格结构，整理公司在 PDF 中已经披露的 operating metrics。优先提取量、价、效率、客户、订单、门店、产能、交付、行业特有 KPI 等指标。表格中的 `FY-3`、`FY-2`、`FY-1`、`FQ0/FY0` 只填真实披露到的期间，没有就写“无信息”或“未披露”。不要新增未来期间列。
+    - 输出内容：
+      | 指标名称 | 指标口径/定义 | FY-3 | FY-2 | FY-1 | FQ0/FY0 | 单位 | 来源页码 | 备注 |
+      | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+      | 指标1 |  |  |  |  |  |  |  |  |
+      | 指标2 |  |  |  |  |  |  |  |  |
+      | 指标3 |  |  |  |  |  |  |  |  |
+      | 指标4 |  |  |  |  |  |  |  |  |
+      | 指标5 |  |  |  |  |  |  |  |  |
+
+    ## ENTRY D_OPS_002
+    - 问题：行业其他关键 operating metrics 补充
+    - 期望输出：请根据上一步已提取出的公司指标认知和 `industry_pack_text`，补充该行业还应重点关注的 operating metrics。重点说明为什么这些指标重要、公司是否已经披露、后续可从哪些公开渠道继续跟踪。不要把同行可比公司数据写进这里。
+    - 输出内容：
+      | 指标名称 | 行业通用性说明 | 为什么重要 | 公司是否已披露 | 可从哪些公开渠道继续跟踪 | 备注 |
+      | --- | --- | --- | --- | --- | --- |
+      | 行业关键指标1 |  |  | 是/否 |  |  |
+      | 行业关键指标2 |  |  | 是/否 |  |  |
+      | 行业关键指标3 |  |  | 是/否 |  |  |
+      | 行业关键指标4 |  |  | 是/否 |  |  |
+      | 行业关键指标5 |  |  | 是/否 |  |  |
+
+  agent: extract_agent
+  output_file: "{file_source_output_path}"
+
+search_public_sources:
   description: |-
-    基于 `extract_file_facts` 的候选 patch 报告，执行 extract 结果的 registry 落账与修订任务。
-
+    请为 {company_name} 的运营指标分析包生成 Search Source Markdown。
     输入：
-    - 当前责任 crew：{owner_crew}
-    - 当前专题焦点：{pack_focus}
-    - 返工反馈：{qa_feedback}
-    - 上游上下文：`extract_file_facts` 的候选 patch 报告
+    - 同行信息 Peer List Source 文本：{peer_info_peer_list_source_text}
+    - 输出路径：{search_source_output_path}
 
     执行要求：
-    - 先用 `read_registry` 按 `owner_crew="{owner_crew}"` 读取当前 crew 的现有条目和需要返工的 `entry_id`。
-    - 只负责把上游已整理好的候选 patch 写回 registry，不再重新发散搜索，也不重新通读 PDF。
-    - 对 `existing_entry_updates` 中的候选，优先使用 `update_entry` amend 既有 `entry_id`；必要时补齐 `unit`、`period`、`source`、`confidence`。
-    - 对 `content_type="table"` 的条目，按 `columns` 完整更新表格行，不要只补半行字段。
-    - 只有确认现有条目不存在语义匹配槽位时，才允许使用 `add_entry` 新建条目。
-    - 调用 `add_entry` 或 `update_entry` 时，`topic` 只能填写规范英文 token：`history / industry / business / peer_info / financial / operating_metrics / risk`；不要填写中文包名、`{pack_title}`、`xx分析包` 或 `xx研究包`。
-    - 对新增或实质更新后的结论，必须补 `add_evidence`；必要时用 `status_update` 写清 `revision_detail`。
-    - 如果 `qa_feedback` 非空，优先关闭其中属于 PDF 提取与原文核对的缺口；无法关闭的条目要明确保留为 `need_revision`。
-    - 任务结束前必须调用 `registry_review` 留痕，说明本轮 amend 了哪些条目、是否新建条目，以及哪些缺口仍未关闭。
-  expected_output: |-
-    面向 manager 的落账结果摘要：
-    - 已 amend 的 `entry_id` 列表与关键更新字段
-    - 已新建的 `entry_id` 列表与新增原因
-    - 仍未关闭的缺口与原因
-    - 建议下一步交回 `extract`、`search` 还是直接进入 `qa` 的事项
-  agent: extract_file_fact_agent
-search_facts:
+    - 只使用公开资料搜索，不要回到 PDF 原文。
+    - 只围绕 `peer_info_peer_list_source_text` 中已经确认的可比公司名称搜索同行 operating metrics。
+    - 优先搜索与公司自身经营分析最相关的量、价、效率、客户、订单、门店、产能、交付、行业特有 KPI。
+    - 如果满足“至少 2 家可比公司，且至少 1 个指标有 2 个可比较期间”，就按表格整理。
+    - 如果数据太稀疏，允许不列表格，但必须明确写出找到的公司、找到的指标、缺失的期间和不能稳健对比的原因。
+    - 严格按照 expected_output 的 ENTRY 结构输出，并保留 entry_id。
+    - 只输出 Markdown 正文，不要输出最终 pack。
+  expected_output: |
+    # {company_name} 运营指标分析包 Search Source
+
+    ## ENTRY D_OPS_003
+    - 问题：同行可比 operating metrics 搜索与整理
+    - 期望输出：如果可比数据足够，请直接按下列 Markdown 表格结构整理同行 operating metrics。优先列出与公司最核心的经营指标口径最接近的数据。不要新增未来期间列。
+    - 输出内容：
+      | 指标名称 | 公司名称 | FY-2 | FY-1 | FQ0/FY0 | 单位 | 来源 | 备注 |
+      | --- | --- | --- | --- | --- | --- | --- | --- |
+      | 指标1 | 可比公司1 |  |  |  |  |  |  |
+      | 指标1 | 可比公司2 |  |  |  |  |  |  |
+      | 指标2 | 可比公司1 |  |  |  |  |  |  |
+      | 指标2 | 可比公司2 |  |  |  |  |  |  |
+
+    ## ENTRY D_OPS_004
+    - 问题：同行可比数据充分性与缺口
+    - 期望输出：请说明同行 operating metrics 是否足够支撑稳健对比。如果数据不足，不要强行补表，而要明确写清楚样本数量、缺失期间、口径差异和当前不能得出稳健结论的原因。
+    - 输出内容：
+      - 样本公司：
+      - 已找到的核心指标：
+      - 缺失的关键期间或口径：
+      - 当前是否足以列表对比：是 / 否
+      - 原因说明：
+
+  agent: search_agent
+  output_file: "{search_source_output_path}"
+
+analyze_operating_metrics:
+  description: |-
+    请基于 {company_name} 当前专题的两份 source md、业务分析和行业分析，生成运营指标分析中间产物。
+    输入：
+    - File Source：{file_source_output_path}
+    - Search Source：{search_source_output_path}
+    - 业务分析包文本：{business_pack_text}
+    - 行业分析包文本：{industry_pack_text}
+    - PDF 文件路径：{pdf_file_path}
+    - 页码索引路径：{page_index_file_path}
+    - 输出路径：{operating_metrics_analysis_output_path}
+
+    执行要求：
+    - 先读 File Source，确认公司自身已经披露了哪些指标、行业还应关注哪些指标。
+    - 再读 Search Source，确认同行有哪些指标可以比较、哪些口径或期间不足以比较。
+    - 最后结合 `business_pack_text` 和 `industry_pack_text`，按同一组核心 operating metrics 解释公司自身趋势、同行相对位置以及与业务逻辑的一致性。
+    - 明确区分事实、解释和待确认事项。
+    - 如果需要回读 PDF，只能用于解释已有指标，不要扩展新的搜索边界。
+    - 最终只输出 Markdown 正文。
+  expected_output: |
+    # {company_name} 运营指标分析中间产物
+
+    ## 1. 核心 operating metrics 与口径边界
+    - 写明当前分析真正采用的核心 operating metrics 清单。
+    - 明确哪些指标来自公司已披露，哪些指标来自行业关键补充，哪些指标有口径限制。
+
+    ## 2. 公司 operating metrics 趋势分析
+    - 结合时间序列说明公司核心指标的变化方向、变化强度和可能原因。
+
+    ## 3. 同行业可比指标对比分析
+    - 只分析已有可比数据支持的指标。
+    - 数据不足时，要明确写“证据不足”，不要硬下结论。
+
+    ## 4. operating metrics 与业务/行业逻辑的一致性分析
+    - 说明经营指标变化是否与业务模式、竞争格局、行业阶段一致。
+
+    ## 5. 关键缺口与未确认信息
+    - 列出对投资判断影响较大的缺口、冲突点和待确认事项。
+
+  agent: operating_metrics_analysis_agent
+  output_file: "{operating_metrics_analysis_output_path}"
+
+synthesize_and_output:
   crew_name: operating_metrics_crew
   pack_name: operating_metrics_pack
   pack_title: 运营指标分析包
-  pack_focus: 围绕产能与利用率、订单与交付周期、ASP 趋势、客户验证指标和效率比率完成运营指标专题研究。
-  output_title: 运营指标分析包
-  search_guidance: 重点查找最能改变投资判断的运营指标（如产能利用率、订单增速、ASP 变化）；搜不到就明确写缺口，不要编造。
   description: |-
-    围绕 {company_name} 的 {pack_title} 执行外部搜索候选采集任务。
-
+    请基于 {company_name} 当前专题的三份中间产物，输出最终运营指标分析包。
     输入：
-    - 行业：{industry}
-    - 当前责任 crew：{owner_crew}
-    - 当前专题焦点：{pack_focus}
-    - 返工反馈：{qa_feedback}
-    - 上游同行信息分析包：{peer_info_pack_text}
-
-    执行要求：
-    - 先用 `read_registry` 按 `owner_crew="{owner_crew}"` 读取当前 crew 的条目清单，优先关注 `unchecked / need_revision` 的 `high / medium` 条目。
-    - 只有在已经通过 `read_registry` 拿到具体 `entry_id` 后，才允许继续用 `view="entry_detail"` 下钻；禁止在 `entry_id` 为空时直接调用该视图。
-    - 只处理当前 crew 负责的条目和与之直接相关的新发现，不要越权补写其他 pack。
-    - {search_guidance}
-    - 如果 `qa_feedback` 非空，优先回应其中属于外部搜索补证的缺口；被标成 `need_revision` 的条目要结合 `revision_detail` 输出定向修订建议。
-    - 你的职责是生成“候选 patch 报告”，而不是直接调用 `update_entry`、`add_entry`、`add_evidence` 或 `status_update`。
-    - 对每个候选更新，优先匹配已有 `entry_id`，明确写出拟更新字段、来源摘要、时间口径和置信度；只有确认现有条目没有语义匹配槽位时，才把它列入 `new_entry_candidates`。
-    - 如果外部资料彼此冲突，必须写清冲突来源、冲突点和当前判断，不能静默忽略。
-    - 如果没有搜到可靠资料，明确写“未搜索到信息”，并把缺口归入 `unresolved_gaps`。
-    - 任务结束时只输出供 `record_search_registry` 落账的候选 patch 报告，不直接写 registry。
-  expected_output: |-
-    面向 manager 和后续 record task 的候选 patch 报告，必须严格包含以下三段：
-    1. `existing_entry_updates`：逐条列出建议 amend 的 `entry_id`、拟更新字段、建议值、来源摘要、时间口径、置信度，以及是否涉及冲突。
-    2. `new_entry_candidates`：仅列出确认没有现有语义匹配槽位的新增候选，写明建议 `entry_type`、标题、核心内容、来源摘要和为什么不能并入旧条目。
-    3. `unresolved_gaps`：列出仍未解决的缺口、缺失原因、建议下一步走 `extract` 还是 `search`，以及是否影响后续综合输出。
-  agent: search_fact_agent
-record_search_registry:
-  description: |-
-    基于 `search_facts` 的候选 patch 报告，执行 search 结果的 registry 落账与修订任务。
-
-    输入：
-    - 当前责任 crew：{owner_crew}
-    - 当前专题焦点：{pack_focus}
-    - 返工反馈：{qa_feedback}
-    - 上游上下文：`search_facts` 的候选 patch 报告
-
-    执行要求：
-    - 先用 `read_registry` 按 `owner_crew="{owner_crew}"` 读取当前 crew 的现有条目和需要返工的 `entry_id`。
-    - 只负责把上游已整理好的候选 patch 写回 registry，不再重新发散搜索。
-    - 对 `existing_entry_updates` 中的候选，优先使用 `update_entry` amend 既有 `entry_id`；必要时补齐 `unit`、`period`、`source`、`confidence`。
-    - 对 `content_type="table"` 的条目，按 `columns` 完整更新表格行，不要只补半行字段。
-    - 只有确认现有条目不存在语义匹配槽位时，才允许使用 `add_entry` 新建条目。
-    - 调用 `add_entry` 或 `update_entry` 时，`topic` 只能填写规范英文 token：`history / industry / business / peer_info / financial / operating_metrics / risk`；不要填写中文包名、`{pack_title}`、`xx分析包` 或 `xx研究包`。
-    - 对新增或实质更新后的结论，必须补 `add_evidence`；必要时用 `status_update` 写清 `revision_detail`。
-    - 如果 `qa_feedback` 非空，优先关闭其中属于外部搜索补证的缺口；无法关闭的条目要明确保留为 `need_revision`。
-    - 任务结束前必须调用 `registry_review` 留痕，说明本轮 amend 了哪些条目、是否新建条目，以及哪些缺口仍未关闭。
-  expected_output: |-
-    面向 manager 的落账结果摘要：
-    - 已 amend 的 `entry_id` 列表与关键更新字段
-    - 已新建的 `entry_id` 列表与新增原因
-    - 仍未关闭的缺口与原因
-    - 建议下一步交回 `extract`、`search` 还是直接进入 `qa` 的事项
-  agent: search_fact_agent
-check_registry:
-  qa_guidance: 确认是否已得到少量但关键的运营指标并有明确口径，而不是泛泛罗列无法支撑判断的数字。
-  description: |-
-    检查 {company_name} 的 {pack_title} 当前 registry 是否已经达到可综合输出的最低要求。
-
-    执行要求：
-    - 先用 `read_registry` 按 `owner_crew="{owner_crew}"` 读取当前 crew 的条目，并重点审查 `record_extract_registry` 与 `record_search_registry` 刚完成 amend 的结果。
-    - {qa_guidance}
-    - 找出仍是 `unchecked / need_revision` 的关键条目，尤其是 `high / medium` 优先级。
-    - 如果发现遗漏，使用 `status_update` 补充更具体的 `revision_detail`，并在 `registry_review` 里写明建议回退给 `extract` 还是 `search`。
-    - 你不负责新增正文内容；你只负责检查、标记和留痕。
-    - 任务结束前必须调用 `registry_review` 留痕。
-  expected_output: |-
-    严格输出 JSON 对象，包含以下字段：
-    - pack_name: 当前分析包名称（字符串）
-    - overall_status: "ready" 或 "not_ready"
-    - issues: 未通过条目列表，每项包含 entry_id、issue_type（枚举：missing_content / need_revision / source_conflict / incomplete_table）、detail
-    - revision_suggestions: 修订建议列表（字符串数组）
-    - recommended_rework_stage: "extract"、"search" 或 "none"
-    - summary: 一段话总结检查结论
-    ready 时 issues 应为空、recommended_rework_stage 应为 "none"。
-  agent: qa_check_agent
-synthesize_and_output:
-  synthesize_guidance: 输出要聚焦核心 KPI 定义与趋势、产能扩张计划、同行指标对比和仍不可确认的关键缺口。
-  output_skeleton: |
-    严格按下列格式形成一份结构化文本，严格使用下列标题作为标题，不得遗漏以下任何一个标题，不要增加任何标题和分节。必要时可以补充表格辅助阅读。
-    每节要求写明：核心结论 / 关键证据或数据 / 冲突点 / 待确认事项。
-
-    # {company_name} 运营指标分析
-    ## 1. 核心 KPI 定义与口径
-    - 1.1 本公司关键运营指标清单及其定义
-    - 1.2 指标口径说明（计算方式、时间范围、是否经审计）
-    ## 2. 产能、产量与 ASP
-    - 2.1 设计产能、有效产能与实际产量
-    - 2.2 产能利用率趋势
-    - 2.3 平均销售价格（ASP）及变动趋势
-    ## 3. 订单、交付与客户验证
-    - 3.1 在手订单规模与增速
-    - 3.2 订单交付周期与履约率
-    - 3.3 客户数量变动与新增/流失
-    ## 4. 效率趋势及财务印证
-    - 4.1 人均产出、单位成本等效率指标
-    - 4.2 运营指标与财务表现的传导关系
-    - 4.3 效率改善或恶化的关键驱动因素
-    ## 5. 同行指标对比
-    - 5.1 与可比公司的核心运营指标对比
-    - 5.2 行业基准与 {company_name} 的相对位置
-    ## 6. 关键缺口与未确认指标
-    - 6.1 仍缺失的关键运营数据
-    - 6.2 数据可信度存疑的指标
-    - 6.3 对投资判断有重大影响的未确认信息
-  description: |-
-    基于 registry 中 {company_name} 的 {pack_title} 生成最终 Markdown 分析包。
-
-    输入：
-    - 行业：{industry}
+    - File Source：{file_source_output_path}
+    - Search Source：{search_source_output_path}
+    - Operating Metrics Analysis：{operating_metrics_analysis_output_path}
     - 输出路径：{pack_output_path}
-    - 当前专题焦点：{pack_focus}
-    - 上游同行信息分析包：{peer_info_pack_text}
 
     执行要求：
-    - 先用 `read_registry` 按 `owner_crew="{owner_crew}"` 读取当前 crew 的全部条目；只有在已经通过 `read_registry` 拿到具体 `entry_id` 后，才允许继续用 `view="entry_detail"` 下钻关键条目。
-    - 只综合当前 crew 负责的事实、数据、judgment 和相关证据，不得越权引用其他 pack 的未沉淀内容。
-    - 本任务是严格只读综合：不得调用 `update_entry`、`add_entry`、`add_evidence` 或 `status_update` 修改 entry 内容、状态或证据。
-    - 如果 `high / medium` 条目仍是 `unchecked / need_revision`，必须在正文和 `registry_review` 里显式写出缺口、影响和建议补证方向，不能偷偷补写 registry。
-    - 明确区分：已被证据支持、存在冲突、仍未解决。
-    - 如果存在冲突，要写明冲突点和严重程度，不要静默忽略。
-    - {synthesize_guidance}
-    - 任务结束前必须调用 `registry_review` 留痕，说明本轮综合输出是否仍有残余缺口。
+    - 只基于三份上游产物进行综合。
+    - 先列表格，再接分析，让每段分析都能追溯到具体数据。
+    - 对缺失、冲突、稀疏数据要显式写边界。
+    - 不新增新的事实，不扩展新的搜索边界，不重做口径发明。
+    - 最终只输出 Markdown 正文。
   expected_output: |
-    {output_skeleton}
+    # {company_name} 运营指标分析
+    ## 1. 核心 operating metrics 定义与口径
+    - 列出本次分析最终采用的核心 operating metrics 及其定义边界。
+
+    ## 2. 公司已披露 operating metrics 总表
+    - 直接列出 File Source 中公司已披露指标的核心表格。
+
+    ## 3. 行业关键 operating metrics 补充清单
+    - 直接列出 File Source 中“行业其他关键 operating metrics 补充”表格。
+
+    ## 4. 同行业可比 operating metrics 对比
+    - 如同行数据充分，列出 Search Source 中的同行表格。
+    - 如同行数据不足，明确说明为何不能稳健列表对比。
+
+    ## 5. 公司 operating metrics 趋势分析
+    - 结合中间分析产物，解释公司自身经营指标变化。
+
+    ## 6. 同行业对比下的相对位置与原因
+    - 结合中间分析产物，解释公司与同行的差异来源。
+
+    ## 7. 关键缺口与待确认事项
+    - 汇总当前运营指标分析里最重要的缺口、冲突点和待确认事项。
+
   agent: synthesizing_agent
-  output_file: '{pack_output_path}'
+  output_file: "{pack_output_path}"

@@ -9,42 +9,20 @@ from crewai.project import CrewBase, agent, crew, task
 
 from automated_research_report_generator.flow.common import PROJECT_ROOT
 from automated_research_report_generator.llm_config import get_heavy_llm
-from automated_research_report_generator.tools import (
-    ReadRegistryTool,
-)
-from automated_research_report_generator.tools.pdf_page_tools import (
-    ReadPdfPageIndexTool,
-    ReadPdfPagesTool,
-)
-
-# 设计目的：把 investment thesis crew 保留为整个项目里的特例，在这个 crew 里允许模型显式思考，因为综合投资判断和管理层尽调问题设计都需要更深一层的推理。
-# 模块功能：提供 thesis 综合和尽调问题设计两个角色，先综合结论，再形成只读权限下的尽调问题。
-# 实现逻辑：按当前定义的输入、处理和返回顺序执行，直接复用本函数或类里已经写好的步骤。
-# 可调参数：`INVESTMENT_THESIS_AGENT_TEMPERATURE`、`INVESTMENT_THESIS_AGENT_REASONING` 和 `output_log_file_path`。
-# 默认参数及原因：默认 `temperature=0.5` 且 `reasoning=False`，原因是当前 CrewAI 1.14.1 在 thesis reasoning 上存在兼容噪音，先以稳定产出为主。
 
 PROJECT_LOG_DIR = PROJECT_ROOT / "logs"
 DEFAULT_CREW_LOG_FILE = str(PROJECT_LOG_DIR / "investment_thesis_crew.json")
-INVESTMENT_THESIS_AGENT_TEMPERATURE = 0.5
 INVESTMENT_THESIS_AGENT_REASONING = False
-
-# 设计目的：让 thesis 任务和 diligence 任务共用同一套 PDF 读取视图，避免引用页码口径不一致。
-# 模块功能：提供页码索引与页面正文读取。
-# 实现逻辑：按当前定义的输入、处理和返回顺序执行，直接复用本函数或类里已经写好的步骤。
-# 可调参数：后续如果 PDF 工具实现变化，可在这里统一替换。
-# 默认参数及原因：当前直接使用默认构造，因为项目已经把常用行为封装在工具类里。
-shared_pdf_page_index_tool = ReadPdfPageIndexTool()
-shared_pdf_page_reader_tool = ReadPdfPagesTool()
 
 
 @CrewBase
 class InvestmentThesisCrew:
     """
-    设计目的：把投资结论综合和尽调问题设计放在同一个 thesis 阶段，保持最终判断口径一致。
-    模块功能：集中声明 thesis 综合角色、尽调问题角色、两步任务和该阶段特例参数。
-    实现逻辑：先汇总前面各包形成投资主线，再在同一套结论基础上整理尽调问题清单。
-    可调参数：YAML 配置、日志路径、temperature、reasoning 开关和工具权限边界。
-    默认参数及原因：默认保留较高温度和 reasoning，原因是这一阶段需要把前面材料压成最终判断，但仍要由权限边界限制可写范围。
+    目的：封装 v0.3 thesis 阶段的三视角辩论执行单元。
+    功能：让 bull、neutral、bear 三个视角先分别成文，再由 synthesizer 综合共识与分歧。
+    实现逻辑：通过 4 个 agent + 4 个 task 顺序执行，并显式隔离前三个立场任务的上下文。
+    可调参数：日志路径、模型温度、任务 YAML 配置和输出路径。
+    默认参数及原因：默认采用 `Process.sequential`，原因是最终综合必须建立在前三份立场稿已经产出的前提下。
     """
 
     agents: List[BaseAgent]
@@ -54,31 +32,21 @@ class InvestmentThesisCrew:
     tasks_config = "config/tasks.yaml"
     output_log_file_path: str | bool | None = DEFAULT_CREW_LOG_FILE
 
-    # 设计目的：主 thesis agent 只消费前序阶段已经沉淀好的 registry 判断，不再反向改写账本。
-    # 模块功能：构造 investment_synthesizer，并把温度和 reasoning 例外集中在常量里管理。
-    # 实现逻辑：按当前定义的输入、处理和返回顺序执行，直接复用本函数或类里已经写好的步骤。
-    # 可调参数：INVESTMENT_THESIS_AGENT_TEMPERATURE 和 INVESTMENT_THESIS_AGENT_REASONING。
-    # 默认参数及原因：使用 0.5 和 False，原因是先绕开 CrewAI 1.14.1 的 thesis reasoning 兼容噪音。
-    @agent
-    def investment_synthesizer(self) -> Agent:
+    def _build_agent(self, config_name: str, temperature: float) -> Agent:
         """
-        设计目的：集中定义主 thesis 综合角色。
-        模块功能：让该角色只读 registry，并综合各研究包形成投资主线。
-        实现逻辑：按当前定义的输入、处理和返回顺序执行，直接复用本函数或类里已经写好的步骤。
-        可调参数：agent 配置、工具列表、temperature 和 reasoning。
-        默认参数及原因：默认使用 0.5 和 False，原因是先保证 thesis 阶段稳定执行，再观察是否需要重新打开 reasoning。
+        目的：统一构造 thesis 阶段的各视角 agent。
+        功能：按角色配置和温度返回稳定的 `Agent` 实例。
+        实现逻辑：四个 agent 共用同一套运行边界，只在角色设定和温度上略有差异。
+        可调参数：`config_name` 和 `temperature`。
+        默认参数及原因：默认 `max_iter=18`，原因是 thesis 辩论需要推理，但不应无限展开。
         """
 
         return Agent(
-            config=self.agents_config["investment_synthesizer"],  # type: ignore[index]
-            tools=[
-                shared_pdf_page_index_tool,
-                shared_pdf_page_reader_tool,
-                ReadRegistryTool(),
-            ],
-            llm=get_heavy_llm(temperature=INVESTMENT_THESIS_AGENT_TEMPERATURE),
+            config=self.agents_config[config_name],  # type: ignore[index]
+            tools=[],
+            llm=get_heavy_llm(temperature=temperature),
             function_calling_llm=None,
-            max_iter=25,
+            max_iter=18,
             max_rpm=None,
             max_execution_time=None,
             verbose=True,
@@ -94,56 +62,67 @@ class InvestmentThesisCrew:
             inject_date=True,
         )
 
-    # 设计目的：把 diligence questions 绑定到只读 registry 权限，避免该任务改写证据账本。
-    # 模块功能：构造 diligence_question_designer，并只注入 ReadRegistryTool。
-    # 实现逻辑：按当前定义的输入、处理和返回顺序执行，直接复用本函数或类里已经写好的步骤。
-    # 可调参数：INVESTMENT_THESIS_AGENT_TEMPERATURE 和 INVESTMENT_THESIS_AGENT_REASONING。
-    # 默认参数及原因：仍然使用 0.5 和 False，原因是该 agent 与 thesis 主 agent 共用同一条稳定性策略，但权限边界仍保持只读。
     @agent
-    def diligence_question_designer(self) -> Agent:
+    def bull_agent(self) -> Agent:
         """
-        设计目的：集中定义尽调问题设计角色。
-        模块功能：让该角色在只读 registry 权限下整理管理层提问清单。
-        实现逻辑：按当前定义的输入、处理和返回顺序执行，直接复用本函数或类里已经写好的步骤。
-        可调参数：agent 配置、工具列表、temperature 和 reasoning。
-        默认参数及原因：默认继续使用 thesis crew 的思考参数，但权限边界保持只读。
+        目的：定义激进视角 agent。
+        功能：从增长潜力和低估可能出发，形成 bullish case。
+        实现逻辑：复用统一 agent 构造器，仅调整角色配置和温度。
+        可调参数：Agent 配置和温度。
+        默认参数及原因：默认 `temperature=0.45`，原因是 bullish case 需要一定展开度。
         """
-        return Agent(
-            config=self.agents_config["diligence_question_designer"],  # type: ignore[index]
-            tools=[
-                shared_pdf_page_index_tool,
-                shared_pdf_page_reader_tool,
-                ReadRegistryTool(),
-            ],
-            llm=get_heavy_llm(temperature=INVESTMENT_THESIS_AGENT_TEMPERATURE),
-            function_calling_llm=None,
-            max_iter=25,
-            max_rpm=None,
-            max_execution_time=None,
-            verbose=True,
-            allow_delegation=False,
-            step_callback=None,
-            cache=True,
-            allow_code_execution=False,
-            max_retry_limit=2,
-            respect_context_window=True,
-            use_system_prompt=True,
-            reasoning=INVESTMENT_THESIS_AGENT_REASONING,
-            max_reasoning_attempts=None,
-            inject_date=True,
-        )
+
+        return self._build_agent("bull_agent", temperature=0.45)
+
+    @agent
+    def neutral_agent(self) -> Agent:
+        """
+        目的：定义中立视角 agent。
+        功能：平衡收益与风险，形成 base case。
+        实现逻辑：复用统一 agent 构造器，仅调整角色配置和温度。
+        可调参数：Agent 配置和温度。
+        默认参数及原因：默认 `temperature=0.3`，原因是中立视角需要更收敛的平衡判断。
+        """
+
+        return self._build_agent("neutral_agent", temperature=0.3)
+
+    @agent
+    def bear_agent(self) -> Agent:
+        """
+        目的：定义保守视角 agent。
+        功能：从风险、估值过高和证据不足出发，形成 bearish case。
+        实现逻辑：复用统一 agent 构造器，仅调整角色配置和温度。
+        可调参数：Agent 配置和温度。
+        默认参数及原因：默认 `temperature=0.35`，原因是 bearish case 需要展开风险链，但不应过度发散。
+        """
+
+        return self._build_agent("bear_agent", temperature=0.35)
+
+    @agent
+    def thesis_synthesizer(self) -> Agent:
+        """
+        目的：定义三视角综合 agent。
+        功能：识别 bull、neutral、bear 的共识与分歧，并输出最终 thesis。
+        实现逻辑：复用统一 agent 构造器，仅调整角色配置和温度。
+        可调参数：Agent 配置和温度。
+        默认参数及原因：默认 `temperature=0.25`，原因是综合阶段更强调收束而非继续发散。
+        """
+
+        return self._build_agent("thesis_synthesizer", temperature=0.25)
 
     @task
-    def synthesize_investment_case(self) -> Task:
+    def build_bull_case(self) -> Task:
         """
-        设计目的：定义投资论述综合任务。
-        模块功能：创建任务。
-        实现逻辑：按当前定义的输入、处理和返回顺序执行，直接复用本函数或类里已经写好的步骤。
-        可调参数：任务配置和输出格式。
-        默认参数及原因：默认输出 markdown，原因是投资主线需要直接进入最终报告。
+        目的：定义激进视角 task。
+        功能：基于上游分析包与估值包输出 bullish thesis 文件。
+        实现逻辑：复用 YAML 配置，并显式把 `context=[]` 作为独立分析边界。
+        可调参数：任务配置和输出路径。
+        默认参数及原因：默认开启 Markdown 输出，原因是该 task 直接产出下游综合要消费的文件。
         """
+
         return Task(
-            config=self.tasks_config["synthesize_investment_case"],  # type: ignore[index]
+            config=self.tasks_config["build_bull_case"],  # type: ignore[index]
+            context=[],
             tools=[],
             async_execution=False,
             output_json=None,
@@ -154,18 +133,62 @@ class InvestmentThesisCrew:
         )
 
     @task
-    def draft_diligence_questions(self) -> Task:
+    def build_neutral_case(self) -> Task:
         """
-        设计目的：定义管理层尽调问题设计任务。
-        模块功能：绑定只读 agent，并把 thesis 结果作为次级上下文。
-        实现逻辑：按当前定义的输入、处理和返回顺序执行，直接复用本函数或类里已经写好的步骤。
-        可调参数：任务配置、agent 绑定和 context 列表。
-        默认参数及原因：默认使用只读 agent，原因是该任务不能改写证据账本。
+        目的：定义中立视角 task。
+        功能：输出独立的 neutral/base case 文件。
+        实现逻辑：复用 YAML 配置，并显式把 `context=[]` 作为独立分析边界。
+        可调参数：任务配置和输出路径。
+        默认参数及原因：默认开启 Markdown 输出，原因是该 task 直接产出下游综合要消费的文件。
         """
+
         return Task(
-            config=self.tasks_config["draft_diligence_questions"],  # type: ignore[index]
-            agent=self.diligence_question_designer(),
-            context=[self.synthesize_investment_case()],
+            config=self.tasks_config["build_neutral_case"],  # type: ignore[index]
+            context=[],
+            tools=[],
+            async_execution=False,
+            output_json=None,
+            output_pydantic=None,
+            human_input=False,
+            cache=True,
+            markdown=True,
+        )
+
+    @task
+    def build_bear_case(self) -> Task:
+        """
+        目的：定义保守视角 task。
+        功能：输出独立的 bearish thesis 文件。
+        实现逻辑：复用 YAML 配置，并显式把 `context=[]` 作为独立分析边界。
+        可调参数：任务配置和输出路径。
+        默认参数及原因：默认开启 Markdown 输出，原因是该 task 直接产出下游综合要消费的文件。
+        """
+
+        return Task(
+            config=self.tasks_config["build_bear_case"],  # type: ignore[index]
+            context=[],
+            tools=[],
+            async_execution=False,
+            output_json=None,
+            output_pydantic=None,
+            human_input=False,
+            cache=True,
+            markdown=True,
+        )
+
+    @task
+    def synthesize_final_investment_case(self) -> Task:
+        """
+        目的：定义最终综合 task。
+        功能：基于三份立场稿形成最终 thesis 文件。
+        实现逻辑：显式把 bull、neutral、bear 三个 task 作为唯一 context，阻断默认前序上下文注入。
+        可调参数：任务配置、上下文和输出路径。
+        默认参数及原因：默认依赖前三个 task，原因是最终综合必须建立在明确的立场差异之上。
+        """
+
+        return Task(
+            config=self.tasks_config["synthesize_final_investment_case"],  # type: ignore[index]
+            context=[self.build_bull_case(), self.build_neutral_case(), self.build_bear_case()],
             tools=[],
             async_execution=False,
             output_json=None,
@@ -178,18 +201,29 @@ class InvestmentThesisCrew:
     @crew
     def crew(self) -> Crew:
         """
-        设计目的：统一返回 thesis 阶段使用的 Crew 实例。
-        模块功能：确保日志目录存在，并构造顺序执行的 investment_thesis_crew。
-        实现逻辑：按当前定义的输入、处理和返回顺序执行，直接复用本函数或类里已经写好的步骤。
-        可调参数：日志路径、缓存、tracing 和 `chat_llm`。
-        默认参数及原因：默认采用 `Process.sequential`，原因是先形成 thesis，再整理尽调问题。
+        目的：返回 thesis 阶段使用的 Crew 实例。
+        功能：保证日志目录存在，并构造顺序执行的四任务 investment_thesis_crew。
+        实现逻辑：按 bull -> neutral -> bear -> synthesizer 的固定顺序组织 tasks。
+        可调参数：日志路径和缓存配置。
+        默认参数及原因：默认采用 `Process.sequential`，原因是最终综合依赖前三个 task 的成文结果。
         """
+
         if isinstance(self.output_log_file_path, str):
             Path(self.output_log_file_path).parent.mkdir(parents=True, exist_ok=True)
         return Crew(
             name="investment_thesis_crew",
-            agents=self.agents,
-            tasks=self.tasks,
+            agents=[
+                self.bull_agent(),
+                self.neutral_agent(),
+                self.bear_agent(),
+                self.thesis_synthesizer(),
+            ],
+            tasks=[
+                self.build_bull_case(),
+                self.build_neutral_case(),
+                self.build_bear_case(),
+                self.synthesize_final_investment_case(),
+            ],
             process=Process.sequential,
             verbose=True,
             manager_llm=None,
@@ -207,5 +241,4 @@ class InvestmentThesisCrew:
             planning_llm=None,
             tracing=True,
             output_log_file=self.output_log_file_path,
-            chat_llm=get_heavy_llm(),
         )

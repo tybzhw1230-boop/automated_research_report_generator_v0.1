@@ -12,7 +12,6 @@ from pydantic import BaseModel, Field
 
 from automated_research_report_generator.llm_config import get_heavy_llm
 from automated_research_report_generator.tools.document_metadata_tools import (
-    default_document_metadata_path,
     document_metadata_is_current,
     load_document_metadata,
     sample_document_metadata_pages,
@@ -25,6 +24,13 @@ from automated_research_report_generator.tools.pdf_page_tools import compute_pdf
 # 实现逻辑：按当前定义的输入、处理和返回顺序执行，直接复用本函数或类里已经写好的步骤。
 # 可调参数：抽样页数、agent 参数，以及 `force_rebuild`。
 # 默认参数及原因：默认优先复用已有 metadata，原因是基础信息通常变化很少，没必要重复调模型。
+
+# 设计目的：保留旧同名符号，方便现有测试和兼容层继续校验“当前实现不会再触达默认 metadata 路径”。
+# 模块功能：提供一个可 monkeypatch 的占位符，但不再承载任何运行时路径计算逻辑。
+# 实现逻辑：显式设为 `None`，避免重新引入只调用一次的路径封装。
+# 可调参数：当前无。
+# 默认参数及原因：默认留空占位，原因是运行时路径已直接在调用点展开。
+default_document_metadata_path = None
 
 DOCUMENT_METADATA_AGENT_ROLE = "PDF 文档基础信息识别专员"
 DOCUMENT_METADATA_AGENT_GOAL = (
@@ -51,9 +57,10 @@ DOCUMENT_METADATA_PROMPT_RULES = (
     "company_name 使用公司标准名称。",
     "industry 使用尽量简洁的行业名称。",
     "报告期间识别规则：从财务数据、审计报告、封面日期等线索中提取。"
-    "period_1/2/3 是报告期覆盖的三个完整会计年度（如 '2021'、'2022'、'2023'）。"
-    "period_4 是最近一季的上一年可比期间（如 '2024H1'），period_5 是最近一季（如 '2025H1'）。"
-    "如果文档只覆盖年度报告没有季度数据，period_4 和 period_5 留空。"
+    "fq0_or_fy0 表示最近一个会计期间/会计年度；季度可写成 '2025Q1A'、'2025H1A'，年度可写成 '2025A'。"
+    "fq_minus_1 仅在最近一期是季度或中期口径时填写，表示上一个可比季度/中期期间，如 '2024Q1A'、'2024H1A'。"
+    "fy_minus_1、fy_minus_2、fy_minus_3 表示最近年度往前推的三个已披露年度，如 '2024A'、'2023A'、'2022A'。"
+    "fy_1、fy_2、fy_3、fy_4、fy_5 表示未来预测年度，如 '2026E'、'2027E'。"
     "如果无法判断某个期间，该字段留空字符串。",
     f"如果材料里无法明确判断公司或行业，就返回“{DOCUMENT_METADATA_UNKNOWN_COMPANY}”或“{DOCUMENT_METADATA_UNKNOWN_INDUSTRY}”。",
     "不要输出解释、前后缀、Markdown 代码块或额外文本。",
@@ -71,11 +78,16 @@ class PdfDocumentMetadata(BaseModel):
 
     company_name: str = Field(..., description="PDF 对应公司的标准名称")
     industry: str = Field(..., description="PDF 对应公司的所属行业")
-    period_1: str = Field("", description="报告期第1年，如 '2021'")
-    period_2: str = Field("", description="报告期第2年，如 '2022'")
-    period_3: str = Field("", description="报告期第3年，如 '2023'")
-    period_4: str = Field("", description="报告期最近一季的上一年可比期间，如 '2024H1'")
-    period_5: str = Field("", description="报告期最近一季，如 '2025H1'")
+    fq0_or_fy0: str = Field("", description="最近一个会计期间/会计年度，如 '2025Q1A'、'2025H1A'、'2025A'")
+    fq_minus_1: str = Field("", description="最近一期的上一个可比季度/中期期间，如 '2024Q1A'、'2024H1A'")
+    fy_minus_1: str = Field("", description="最近年度往前推的第1个已披露年度，如 '2024A'")
+    fy_minus_2: str = Field("", description="最近年度往前推的第2个已披露年度，如 '2023A'")
+    fy_minus_3: str = Field("", description="最近年度往前推的第3个已披露年度，如 '2022A'")
+    fy_1: str = Field("", description="最近会计期间/年度之后的第1个预测年度，如 '2026E'")
+    fy_2: str = Field("", description="最近会计期间/年度之后的第2个预测年度，如 '2027E'")
+    fy_3: str = Field("", description="最近会计期间/年度之后的第3个预测年度，如 '2028E'")
+    fy_4: str = Field("", description="最近会计期间/年度之后的第4个预测年度，如 '2029E'")
+    fy_5: str = Field("", description="最近会计期间/年度之后的第5个预测年度，如 '2030E'")
 
 
 class PdfDocumentMetadataPayload(BaseModel):
@@ -95,16 +107,18 @@ class PdfDocumentMetadataPayload(BaseModel):
     source_pages: list[int]
     periods: dict[str, str] = Field(
         default_factory=lambda: {
-            "{期间1}": "",
-            "{期间2}": "",
-            "{期间3}": "",
-            "{期间4}": "",
-            "{期间5}": "",
-            "{预测期1}": "",
-            "{预测期2}": "",
-            "{预测期3}": "",
+            "{FQ0/FY0}": "",
+            "{FQ-1}": "",
+            "{FY-1}": "",
+            "{FY-2}": "",
+            "{FY-3}": "",
+            "{FY1}": "",
+            "{FY2}": "",
+            "{FY3}": "",
+            "{FY4}": "",
+            "{FY5}": "",
         },
-        description="报告期间占位符到实际期间的映射，如 {'{期间1}': '2021', '{期间3}': '2023'}",
+        description="报告期间占位符到实际期间的映射，如 {'{FY-1}': '2024A', '{FQ0/FY0}': '2025Q1A'}",
     )
 
 
@@ -148,10 +162,22 @@ def _extract_metadata_from_raw(raw: str) -> tuple[str, str, dict[str, str]]:
         return "", "", {}
 
     periods = {}
-    for i in range(1, 6):
-        val = str(data.get(f"period_{i}", "") or "").strip()
+    raw_to_placeholder = {
+        "fq0_or_fy0": "{FQ0/FY0}",
+        "fq_minus_1": "{FQ-1}",
+        "fy_minus_1": "{FY-1}",
+        "fy_minus_2": "{FY-2}",
+        "fy_minus_3": "{FY-3}",
+        "fy_1": "{FY1}",
+        "fy_2": "{FY2}",
+        "fy_3": "{FY3}",
+        "fy_4": "{FY4}",
+        "fy_5": "{FY5}",
+    }
+    for raw_key, placeholder in raw_to_placeholder.items():
+        val = str(data.get(raw_key, "") or "").strip()
         if val:
-            periods[f"{{期间{i}}}"] = val
+            periods[placeholder] = val
     return str(data.get("company_name", "") or ""), str(data.get("industry", "") or ""), periods
 
 
@@ -237,10 +263,22 @@ def summarize_document_metadata(
             pyd = result.pydantic
             company_name = str(pyd.company_name or "")
             industry = str(pyd.industry or "")
-            for i in range(1, 6):
-                val = str(getattr(pyd, f"period_{i}", "") or "").strip()
+            pyd_to_placeholder = {
+                "fq0_or_fy0": "{FQ0/FY0}",
+                "fq_minus_1": "{FQ-1}",
+                "fy_minus_1": "{FY-1}",
+                "fy_minus_2": "{FY-2}",
+                "fy_minus_3": "{FY-3}",
+                "fy_1": "{FY1}",
+                "fy_2": "{FY2}",
+                "fy_3": "{FY3}",
+                "fy_4": "{FY4}",
+                "fy_5": "{FY5}",
+            }
+            for attr_name, placeholder in pyd_to_placeholder.items():
+                val = str(getattr(pyd, attr_name, "") or "").strip()
                 if val:
-                    periods[f"{{期间{i}}}"] = val
+                    periods[placeholder] = val
         if not company_name or not industry:
             company_name, industry, fallback_periods = _extract_metadata_from_raw(getattr(result, "raw", "") or "")
             if not periods:
@@ -283,7 +321,7 @@ def ensure_pdf_document_metadata(
     if not pdf_path.exists():
         raise FileNotFoundError(f"PDF file does not exist: {pdf_path}")
 
-    metadata_path = default_document_metadata_path(pdf_path)
+    metadata_path = pdf_path.with_name(f"{pdf_path.stem}_document_metadata.json")
     if not force_rebuild and document_metadata_is_current(pdf_path, metadata_path):
         data = load_document_metadata(metadata_path)
         return {

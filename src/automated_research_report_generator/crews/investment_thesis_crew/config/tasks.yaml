@@ -1,101 +1,128 @@
-synthesize_investment_case:
-  description: |
-    综合各分析包，为 {company_name} 形成投资逻辑。
-
+build_bull_case:
+  description: |-
+    基于 {company_name} 的研究、估值和尽调问题，输出激进视角的 bullish case。
     输入：
-    - 历史与背景分析包：
-      {history_background_pack_text}
-    - 行业分析包：
-      {industry_pack_text}
-    - 业务分析包：
-      {business_pack_text}
-    - 同行信息分析包：
-      {peer_info_pack_text}
-    - 财务分析包：
-      {finance_pack_text}
-    - 运营指标分析包：
-      {operating_metrics_pack_text}
-    - 风险分析包：
-      {risk_pack_text}
-    - 可比公司分析包：
-      {peers_pack_text}
-    - 估值分析包：
-      {valuation_pack_text}
-    - 完整注册表快照：
-      {registry_full_text}
-    - PDF 文件路径：{pdf_file_path}
-    - 页面索引文件路径：{page_index_file_path}
+    - 历史与背景分析包：{history_background_pack_text}
+    - 行业分析包：{industry_pack_text}
+    - 业务分析包：{business_pack_text}
+    - 同行信息分析包：{peer_info_pack_text}
+    - 财务分析包：{finance_pack_text}
+    - 运营指标分析包：{operating_metrics_pack_text}
+    - 风险分析包：{risk_pack_text}
+    - 可比估值分析包：{peers_pack_text}
+    - 内在价值分析包：{intrinsic_value_pack_text}
+    - 综合估值分析包：{valuation_pack_text}
+    - 尽调问题包：{diligence_questions_text}
 
     执行要求：
-    - 如需读取 registry，只使用 `read_registry` 工具，先看完整账本，再按需钻取 judgment 和 evidence 详情。
-    - 明确说明这只股票为什么可能成立，以及为什么可能失败。
-    - 把关键假设、催化因素、失效点和估值承接关系写清楚。
-    - 把投资逻辑与注册表里已有证据支持的问题重新对齐。
-    - 不要写成宣传稿，也不得只讲看多逻辑。
+    - 只输出激进视角，不要提前替 bear 或 neutral 辩护。
+    - 按统一判断坐标输出，必须覆盖：核心结论、最强支撑证据、估值承接判断、关键催化剂、最脆弱假设、最可能改变立场的尽调问题。
+    - 重点写增长空间、竞争优势、估值错配和最可能兑现的催化剂。
+    - 不要把 `diligence_questions_text` 当作附带背景，必须明确点出 1-2 个回答后会直接削弱或推翻 bullish case 的尽调问题，并说明它们分别对应哪条核心假设。
+    - 明确哪些假设一旦失败，会直接削弱 bullish case。
   expected_output: |
     严格按以下模板输出，不增删标题。
+    # {company_name} Bull Case
+    ## 1. 核心看多结论
+    ## 2. 最强支撑证据
+    ## 3. 估值承接判断
+    ## 4. 最关键催化剂
+    ## 5. 最脆弱假设
+    ## 6. 最可能改变此立场的尽调问题
+  agent: bull_agent
+  output_file: "{thesis_output_dir}/01_bull_thesis.md"
 
+build_neutral_case:
+  description: |-
+    基于 {company_name} 的研究、估值和尽调问题，输出中立视角的 base case。
+    输入：
+    - 历史与背景分析包：{history_background_pack_text}
+    - 行业分析包：{industry_pack_text}
+    - 业务分析包：{business_pack_text}
+    - 同行信息分析包：{peer_info_pack_text}
+    - 财务分析包：{finance_pack_text}
+    - 运营指标分析包：{operating_metrics_pack_text}
+    - 风险分析包：{risk_pack_text}
+    - 可比估值分析包：{peers_pack_text}
+    - 内在价值分析包：{intrinsic_value_pack_text}
+    - 综合估值分析包：{valuation_pack_text}
+    - 尽调问题包：{diligence_questions_text}
+
+    执行要求：
+    - 按统一判断坐标输出，必须覆盖：核心结论、最强支撑证据、估值承接判断、关键分歧触发点、最脆弱假设、最可能改变立场的尽调问题。
+    - 平衡收益、风险、证据强弱和估值承接关系。
+    - 避免写成情绪化的多空表态，重点是条件化判断。
+    - 明确当前更合理的区间判断或承接关系，以及这个判断最依赖哪些验证点。
+    - 不要把 `diligence_questions_text` 当作附带背景，必须明确点出 1-2 个回答后会让 neutral case 明显转向 bull 或 bear 的尽调问题，并说明这些问题分别绑定哪条分歧假设。
+  expected_output: |
+    严格按以下模板输出，不增删标题。
+    # {company_name} Neutral Case
+    ## 1. 核心中立结论
+    ## 2. 当前最强支撑证据
+    ## 3. 当前更合理的估值承接判断
+    ## 4. 最关键的分歧触发点
+    ## 5. 最脆弱假设
+    ## 6. 最可能改变此立场的尽调问题
+  agent: neutral_agent
+  output_file: "{thesis_output_dir}/02_neutral_thesis.md"
+
+build_bear_case:
+  description: |-
+    基于 {company_name} 的研究、估值和尽调问题，输出保守视角的 bearish case。
+    输入：
+    - 历史与背景分析包：{history_background_pack_text}
+    - 行业分析包：{industry_pack_text}
+    - 业务分析包：{business_pack_text}
+    - 同行信息分析包：{peer_info_pack_text}
+    - 财务分析包：{finance_pack_text}
+    - 运营指标分析包：{operating_metrics_pack_text}
+    - 风险分析包：{risk_pack_text}
+    - 可比估值分析包：{peers_pack_text}
+    - 内在价值分析包：{intrinsic_value_pack_text}
+    - 综合估值分析包：{valuation_pack_text}
+    - 尽调问题包：{diligence_questions_text}
+
+    执行要求：
+    - 只输出保守视角，不要为了平衡而主动补充 bullish case。
+    - 按统一判断坐标输出，必须覆盖：核心结论、最强支撑证据、估值脆弱性判断、关键风险触发点、最脆弱假设、最可能改变立场的尽调问题。
+    - 重点写风险暴露、估值脆弱性、证据缺口和最可能导致失效的情景。
+    - 明确哪些风险当前已经显性化，哪些还停留在假设层。
+    - 不要把 `diligence_questions_text` 当作附带背景，必须明确点出 1-2 个回答后会明显削弱 bear case 的尽调问题，并说明它们分别对应哪条风险假设或证据缺口。
+  expected_output: |
+    严格按以下模板输出，不增删标题。
+    # {company_name} Bear Case
+    ## 1. 核心看空结论
+    ## 2. 最强支撑证据
+    ## 3. 估值最脆弱的部分
+    ## 4. 最关键的风险触发点
+    ## 5. 最脆弱假设或证据缺口
+    ## 6. 最可能改变此立场的尽调问题
+  agent: bear_agent
+  output_file: "{thesis_output_dir}/03_bear_thesis.md"
+
+synthesize_final_investment_case:
+  description: |-
+    综合 {company_name} 的 bull / neutral / bear 三个立场，输出最终投资论点。
+    执行要求：
+    - 先识别三方共识，再识别核心分歧。
+    - 先总结最值得成立的投资亮点，再总结最需要警惕的投资风险，二者都要和后文判断保持一致，不能写成泛泛而谈的清单。
+    - 对每个核心分歧，明确是由什么假设导致，以及当前哪一边证据更强。
+    - 最终结论必须写清：当前更接近哪一类判断、为何如此、还缺什么验证。
+    - 输出必须体现决策收束，而不是把三份立场稿重新改写一遍。
+    - 必须明确哪些尽调问题最值得继续追，分别会在什么条件下推动结论升级，以及在什么条件下推动结论下调。
+    - 不能简单投票式汇总，必须体现证据权重和分歧来源。
+  expected_output: |
+    严格按以下模板输出，不增删标题。
     # {company_name} 投资逻辑
     ## 1. 一句话结论
-    - 用一句话概括最核心的投资判断
-
-    ## 2. 正面因素/看多逻辑
-    - 逻辑 1
-    - 逻辑 2
-    - 逻辑 3
-
-    ## 3. 负面因素/看跌逻辑
-    - 风险 1
-    - 风险 2
-    - 风险 3
-
-    ## 4. 关键假设
-    | 假设 | 为什么重要 | 当前证据强度 | 如不成立会影响什么 |
-    | --- | --- | --- | --- |
-    | 假设 1 |  |  |  |
-    | 假设 2 |  |  |  |
-    | 假设 3 |  |  |  |
-    | …… |  |  |  |
-
-    ## 5. 催化因素/失效点
-    | 催化因素 | 失效点 |
-    | --- | --- | 
-    | 假设 1 |  | 
-    | 假设 2 |  | 
-    | 假设 3 |  | 
-    | …… |  | 
-  agent: investment_synthesizer
-  output_file: "{thesis_output_dir}/01_investment_thesis.md"
-
-draft_diligence_questions:
-  description: |
-    为 {company_name} 生成面向管理层和尽调环节的高优先级问题清单。
-
-    输入：
-    - 完整注册表快照：
-      {registry_full_text}
-    - PDF 文件路径：{pdf_file_path}
-    - 页面索引文件路径：{page_index_file_path}
-    - 投资逻辑：
-      使用 `synthesize_investment_case` 的输出作为次级上下文
-
-    执行要求：
-    - 必须先使用 `read_registry` 工具读取完整账本。
-    - 优先处理状态不是 `checked` 的 judgment。
-    - 其中 `need_revision` judgment 应视为最高优先级管理层问题。
-    - 只有在完成注册表审阅后，才使用投资逻辑优化分组、措辞和排序。
-    - 本任务只读取 registry，不新增、修改或关闭 judgment。
-    - 问题必须聚焦会实质改变投资判断的不确定性，不得泛泛而谈。
-  expected_output: |
-    严格按以下模板输出，不增删标题。
-
-    # {company_name} 尽调问题包
-    ## 1. 问题清单
-    | 问题 | 对应风险/假设/冲突 | 提问注意事项 |
-    | --- | --- | --- | 
-    | 问题 1 |  |  | 
-    | 问题 2 |  |  | 
-    | 问题 3 |  |  | 
-
-  agent: diligence_question_designer
-  output_file: "{thesis_output_dir}/02_diligence_questions.md"
+    ## 2. 投资亮点
+    ## 3. 投资风险总结
+    ## 4. 三方共识
+    ## 5. 核心分歧
+    ## 6. 证据权重判断
+    ## 7. 当前更接近哪一类结论
+    ## 8. 仍需验证的关键问题
+    ## 9. 什么条件下应升级判断
+    ## 10. 什么条件下应下调判断
+  agent: thesis_synthesizer
+  output_file: "{thesis_output_dir}/04_investment_thesis.md"

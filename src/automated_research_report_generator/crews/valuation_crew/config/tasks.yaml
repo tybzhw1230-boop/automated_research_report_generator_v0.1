@@ -1,28 +1,29 @@
 build_peer_set:
   description: |
     为 {company_name} 构建相对估值分析包。
-
     输入：
     - 同行信息分析包：
       {peer_info_pack_text}
+    - 同行信息 Peer Data Source：
+      {peer_info_peer_data_source_text}
     - 财务分析包：
       {finance_pack_text}
-    - 运营指标分析包：
+    - 经营指标分析包：
       {operating_metrics_pack_text}
     - 风险分析包：
       {risk_pack_text}
-    - PDF 文件路径：{pdf_file_path}
-    - 页面索引文件路径：{page_index_file_path}
+    - 风险跨专题分析中间结果：
+      {risk_search_source_text}
 
     执行要求：
-    - 本任务不再重新选同行；同行池和同行底稿以 `peer_info_pack_text` 为准。
+    - 本任务不再重选同行；同行池和同行底稿以 `peer_info_pack_text` 与 `peer_info_peer_data_source_text` 为准。
+    - 只使用本任务输入范围内的材料，不要回到其他原始 source 或临时扩展新资料。
     - 基于同行倍数、经营差异和风险差异形成相对估值区间。
     - 解释为什么采用这些倍数，以及为什么需要对某些同行做折价或溢价处理。
-    - 如果可比性较弱，要明确指出，而不是强行给出过度精确的结论。
+    - 如可比性较弱，要明确指出，而不是强行给出过度精确的结论。
     - 需要时可以使用 `tushare_valuation_data_tool` 和 `valuation_comparable_tool` 补充最新可比倍数。
   expected_output: |
     严格按以下模板输出，不增删标题；表格保留 Markdown `|` 格式。
-
     # {company_name} 可比估值分析包
     ## 1. 相对估值结论摘要
     - 当前采用的核心倍数
@@ -48,28 +49,25 @@ build_peer_set:
 derive_intrinsic_valuation:
   description: |
     为 {company_name} 构建内在价值分析包。
-
     输入：
-    - 同行信息分析包：
-      {peer_info_pack_text}
     - 财务分析包：
       {finance_pack_text}
-    - 运营指标分析包：
+    - 经营指标分析包：
       {operating_metrics_pack_text}
     - 风险分析包：
       {risk_pack_text}
-    - PDF 文件路径：{pdf_file_path}
-    - 页面索引文件路径：{page_index_file_path}
+    - 风险跨专题分析中间结果：
+      {risk_search_source_text}
 
     执行要求：
-    - 当简洁的 DCF 逻辑有帮助时，使用 `valuation_model_tool`。
+    - 只使用本任务输入范围内的材料，不要引用同行原始 source，也不要回到财务或经营指标的原始 source 重做抽取。
+    - 当简化的 DCF 逻辑有帮助时，使用 `intrinsic_valuation_tool`。
     - 把核心假设写清楚，并说明哪些假设证据强，哪些证据弱。
     - 展示内在价值最敏感的变量和主要情景变化。
-    - 如果关键假设缺乏支撑，要明确指出，并降低结论置信度。
+    - 如关键假设缺乏支撑，要明确指出，并降低结论置信度。
     - 至少输出一张估值结果表和一张敏感性分析表。
   expected_output: |
     严格按以下模板输出，不增删标题；表格保留 Markdown `|` 格式。
-
     # {company_name} 内在价值分析包
     ## 1. 估值框架与核心假设
     - 使用了什么估值方法
@@ -103,28 +101,25 @@ derive_intrinsic_valuation:
 summarize_valuation:
   description: |
     为 {company_name} 构建最终估值分析包。
-
     输入：
-    - 同行信息分析包：
-      {peer_info_pack_text}
-    - 财务分析包：
-      {finance_pack_text}
-    - 运营指标分析包：
-      {operating_metrics_pack_text}
     - 风险分析包：
       {risk_pack_text}
-    - PDF 文件路径：{pdf_file_path}
-    - 页面索引文件路径：{page_index_file_path}
+    - 风险跨专题分析中间结果：
+      {risk_search_source_text}
+    - 上游上下文：
+      `build_peer_set`
+      `derive_intrinsic_valuation`
 
     执行要求：
+    - 本任务只负责消费前两步估值结果并做汇总，不得重新选择可比公司、不得重做 DCF、不得临时发明新的估值假设。
     - 协调可比估值与内在价值估值之间的关系，说明权重逻辑。
     - 把估值区间转换成上行、下行和预期回报框架。
     - 必须调用 `valuation_football_field_tool` 生成 football field，并把返回的 SVG/HTML 原样嵌入结果。
-    - football field 中每条估值带要与估值汇总表中的方法和区间保持一致。
+    - football field 中每条估值带要与前两步结果中的方法和区间保持一致。
+    - 如风险分析显示关键假设支撑较弱，要在最终结论中明确体现折价、降权或降置信度。
     - 输出要先给出文字结论，再给估值汇总表。
   expected_output: |
-    严格按以下模板输出，不增删标题；表格保留 Markdown `|` 格式；Football Field 直接插入 `valuation_football_field_tool` 返回的原始 SVG/HTML。
-
+    严格按以下模板输出，不增删标题；表格保留 Markdown `|` 格式，Football Field 直接插入 `valuation_football_field_tool` 返回的原始 SVG/HTML。
     # {company_name} 估值分析包
     ## 1. 估值结论摘要
     - 文字版估值结论

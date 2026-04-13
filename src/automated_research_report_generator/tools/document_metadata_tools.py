@@ -14,26 +14,12 @@ from pydantic import BaseModel
 
 from automated_research_report_generator.tools.pdf_page_tools import (
     compute_pdf_fingerprint,
-    default_page_index_path,
     extract_pdf_pages,
 )
 
 
 MAX_METADATA_SOURCE_PAGES = 20
 MAX_METADATA_PAGE_CHARS = 2500
-
-
-def default_document_metadata_path(pdf_file_path: str | Path) -> Path:
-    """
-    设计目的：统一 metadata 文件命名规则。
-    模块功能：基于 PDF 路径生成对应的 metadata JSON 路径。
-    实现逻辑：按当前定义的输入、处理和返回顺序执行，直接复用本函数或类里已经写好的步骤。
-    可调参数：`pdf_file_path`。
-    默认参数及原因：默认和页索引文件放在同一目录，原因是两者都属于 PDF 预处理产物。
-    """
-
-    pdf_path = Path(pdf_file_path).expanduser().resolve()
-    return default_page_index_path(pdf_path).with_name(f"{pdf_path.stem}_document_metadata.json")
 
 
 def load_document_metadata(metadata_path: str | Path) -> dict[str, Any]:

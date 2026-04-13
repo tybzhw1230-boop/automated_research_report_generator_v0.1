@@ -1,143 +1,476 @@
-extract_file_facts:
-  extract_guidance: 重点提取公司沿革时间线、历次股权变动、实控人链条、董监高履历和治理架构；注意捕捉关联交易和同业竞争披露。
+extract_from_pdf:
   description: |-
-    围绕 {company_name} 的 {pack_title} 执行 PDF 候选采集任务。
-
+    请根据 PDF 为{company_name}的历史与背景分析包生成 File Source Markdown。
     输入：
     - PDF 文件路径：{pdf_file_path}
-    - 页面索引文件路径：{page_index_file_path}
-    - 当前专题焦点：{pack_focus}
-    - 返工反馈：{qa_feedback}
+    - 页码索引路径：{page_index_file_path}
+    - 输出路径：{file_source_output_path}
 
     执行要求：
-    - 先读取页码索引，再有选择地读取相关页面，不要通读全文。
-    - {extract_guidance}
-    - 先用 `read_registry` 按 `owner_crew="{owner_crew}"` 读取当前 crew 的条目清单，优先关注 `unchecked / need_revision` 的 `high / medium` 条目。
-    - 只处理当前 crew 负责的条目和与之直接相关的新发现，不要越权补写其他 pack。
-    - 如果 `qa_feedback` 非空，优先回应其中属于文件提取、原文核对和页码补证的缺口；被标成 `need_revision` 的条目要结合 `revision_detail` 输出定向修订建议。
-    - 你的职责是生成“候选 patch 报告”，而不是直接调用 `update_entry`、`add_entry`、`add_evidence` 或 `status_update`。
-    - 对每个候选更新，优先匹配已有 `entry_id`，明确写出拟更新字段、原文摘录、页码或章节位置、时间口径和置信度；只有确认现有条目没有语义匹配槽位时，才把它列入 `new_entry_candidates`。
-    - 如果 PDF 原文与外部资料或现有判断冲突，必须写清冲突来源、冲突点和当前判断，不能静默忽略。
-    - 如果在 PDF 中无法提取到可靠信息，明确写“未提取到信息”，并把缺口归入 `unresolved_gaps`。
-    - 任务结束时只输出供 `record_extract_registry` 落账的候选 patch 报告，不直接写 registry。
-  expected_output: |-
-    面向 manager 和后续 record task 的候选 patch 报告，必须严格包含以下三段：
-    1. `existing_entry_updates`：逐条列出建议 amend 的 `entry_id`、拟更新字段、建议值、来源摘要、时间口径、置信度，以及是否涉及冲突。
-    2. `new_entry_candidates`：仅列出确认没有现有语义匹配槽位的新增候选，写明建议 `entry_type`、标题、核心内容、来源摘要和为什么不能并入旧条目。
-    3. `unresolved_gaps`：列出仍未解决的缺口、缺失原因、建议下一步走 `extract` 还是 `search`，以及是否影响后续综合输出。
-  agent: extract_file_fact_agent
-record_extract_registry:
+    - 先读取 PDF 页面索引，再按需读取相关页面。
+    - 严格按照 expected_output 的 ENTRY 结构逐条输出，并保留 entry_id。
+    - 输出内容必须基于 PDF 中的原始信息，原则上不更改文件中的信息，尽量不选取材料中广告成分较大的部分。
+    - 每个条目都必须完整保留 entry_id，并按“期望输出”要求的字段和格式填写“输出内容”。
+    - 如果没有信息或该问题不适用该公司，也必须保留 entry_id，并在输出内容里输出“无信息”或“不适用”。一个entry有多个小问，部分可以回答，部分不可以回答，明确区分开。
+    - 不要输出最终 pack，不要改写其他专题内容。
+    - 最终只输出 Markdown 正文。
+  expected_output: |
+    # {company_name} 历史与背景分析包 File Source
+
+    ## ENTRY F_HIS_001
+    - 问题：公司全称与简称
+    - 期望输出：全称、简称、证券代码、英文名称。
+    - 输出内容：
+
+    ## ENTRY F_HIS_002
+    - 问题：地址
+    - 期望输出：注册地址、总部地址等
+    - 输出内容：
+
+    ## ENTRY F_HIS_003
+    - 问题：里程碑日期
+    - 期望输出：成立日期、股改日期（如适用）、提交上市材料日期（如有）、拟发行日期（如有）。
+    - 输出内容：
+
+    ## ENTRY F_HIS_004
+    - 问题：法定代表人
+    - 期望输出：现任法定代表人及任职起始时间。
+    - 输出内容：
+
+    ## ENTRY F_HIS_005
+    - 问题：注册资本
+    - 期望输出：注册资本金额、实缴情况。
+    - 输出内容：
+
+    ## ENTRY F_HIS_006
+    - 问题：统一社会信用代码
+    - 期望输出：统一社会信用代码/营业执照编号。
+    - 输出内容：
+
+    ## ENTRY F_HIS_007
+    - 问题：上市/挂牌状态
+    - 期望输出：上市交易所、板块、上市日期。如果未上市，输出“未上市”。
+    - 输出内容：
+
+    ## ENTRY F_HIS_009
+    - 问题：公司定位一句话描述
+    - 期望输出：用一句话概括公司是做什么的、服务谁、核心价值是什么。
+    - 输出内容：
+
+    ## ENTRY F_HIS_010
+    - 问题：设立背景与方式
+    - 期望输出：从材料中截取公司前身、设立方式（发起/改制）、原始出资方及出资方式的相关信息，可以比较详细。
+    - 输出内容：
+
+    ## ENTRY F_HIS_011
+    - 问题：历史里程碑时间线
+    - 期望输出：请直接按下列 Markdown 表格结构输出上市、并购、扩产、融资等关键事件时间线。
+      | 时间 | 事件类型 | 简要描述 | 重要性原因 |
+      | --- | --- | --- | --- |
+      |  |  |  |  |
+    - 输出内容：
+
+    ## ENTRY F_HIS_012
+    - 问题：历次重大重组/并购
+    - 期望输出：请直接按下列 Markdown 表格结构输出历史重大资产重组、业务重组和并购事件。
+      | 时间 | 交易简要描述 | 涉及业务/资产 | 交易对方 | 交易金额（如有披露） | 对公司发展的影响 |
+      | --- | --- | --- | --- | --- | --- |
+      |  |  |  |  |  |  |
+    - 输出内容：
+
+    ## ENTRY F_HIS_013
+    - 问题：历史战略转型
+    - 期望输出：请直接按下列 Markdown 表格结构输出主营业务转型历史、商业模式变革及驱动因素。
+      | 时间 | 转型前主营业务/商业模式 | 转型后主营业务/商业模式 | 驱动因素 |
+      | --- | --- | --- | --- |
+      |  |  |  |  |
+    - 输出内容：
+
+    ## ENTRY F_HIS_014
+    - 问题：历史上的重大融资事件
+    - 期望输出：请直接按下列 Markdown 表格结构输出 IPO、增发、配股、可转债等历史融资事项。
+      | 时间 | 融资类型 | 发行比例（如有披露） | 融资金额（如有披露） | 融资估值（投后，如有披露） | 主要投资者（如有披露） | 融资目的及影响 |
+      | --- | --- | --- | --- | --- | --- | --- |
+      |  |  |  |  |  |  |  |
+    - 输出内容：
+
+    ## ENTRY F_HIS_015
+    - 问题：历史上的重大诉讼/处罚
+    - 期望输出：请直接按下列 Markdown 表格结构输出历史重大诉讼、行政处罚及其解决情况。
+      | 时间 | 案件/处罚简要描述 | 涉及金额（如有披露） | 当前状态 | 对公司的影响 |
+      | --- | --- | --- | --- | --- |
+      |  |  |  |  |  |
+    - 输出内容：
+
+    ## ENTRY D_HIS_001
+    - 问题：前十大股东持股明细
+    - 期望输出：请直接按下列 Markdown 表格结构输出前十大股东持股明细。
+      | 排名 | 股东名称 | 持股数量 | 持股比例 | 股份性质 |
+      | --- | --- | --- | --- | --- |
+      |  |  |  |  |  |
+    - 输出内容：
+
+    ## ENTRY F_HIS_017
+    - 问题：实际控制人与控股股东
+    - 期望输出：实际控制人名称及控制链条、控股股东名称、持股比例及一致行动人（action in cohert)。实际控制人的个人履历、从业背景。
+    - 输出内容：
+
+    ## ENTRY F_HIS_019
+    - 问题：控股股东主营业务
+    - 期望输出：控股股东除{company_name}以外的主要业务、资产规模及财务状况。如果控股股东是一个企业集团，尽量列示该集团的整体情况以及与{company_name}的关系。
+    - 输出内容：
+
+    ## ENTRY F_HIS_020
+    - 问题：公司与控股股东之间的关系
+    - 期望输出：控股股东资产负债率、是否存在资金紧张、公司与控股股东之间是否存在资金依赖。
+    - 输出内容：
+
+    ## ENTRY F_HIS_021
+    - 问题：股东权力受限
+    - 期望输出：控股股东或主要股东持股是否存在质押、冻结或其他权利受限情况。
+    - 输出内容：
+
+    ## ENTRY F_HIS_023
+    - 问题：对赌协议情况
+    - 期望输出：是否存在对赌协议、业绩承诺及解除情况。
+    - 输出内容：
+
+    ## ENTRY F_HIS_024
+    - 问题：股权激励计划
+    - 期望输出：员工持股计划、限制性股票、股票期权安排。股权激励覆盖的人数、层级及解锁条件。
+    - 输出内容：
+
+    ## ENTRY F_HIS_029
+    - 问题：董事会
+    - 期望输出：请直接按下列 Markdown 表格结构输出董事会信息。
+      | 姓名 | 任职 | 专业委员会任职 | 简历或背景 |
+      | --- | --- | --- | --- |
+      |  |  |  |  |
+    - 输出内容：
+
+    ## ENTRY F_HIS_031
+    - 问题：高级管理层
+    - 期望输出：请直接按下列 Markdown 表格结构输出高级管理层信息。
+      | 姓名 | 任职 | 简历或背景 | 薪酬 |
+      | --- | --- | --- | --- |
+      |  |  |  |  |
+    - 输出内容：
+
+    ## ENTRY F_HIS_032
+    - 问题：管理层变动
+    - 期望输出：近期内管理层变动情况，是否有重大人事调整。
+    - 输出内容：
+
+    ## ENTRY F_HIS_033
+    - 问题：管理层兼职情况
+    - 期望输出：董监高是否在关联方或同业兼职。
+    - 输出内容：
+
+    ## ENTRY D_HIS_004
+    - 问题：主要控股子公司
+    - 期望输出：请直接按下列 Markdown 表格结构输出主要控股子公司信息。
+      | 子公司名称 | 持股比例 | 主营业务情况 | 财务贡献 |
+      | --- | --- | --- | --- |
+      |  |  |  |  |
+    - 输出内容：
+
+    ## ENTRY D_HIS_005
+    - 问题：参股公司
+    - 期望输出：请直接按下列 Markdown 表格结构输出参股公司信息。
+      | 参股公司名称 | 主营业务 | 持股比例 |
+      | --- | --- | --- |
+      |  |  |  |
+    - 输出内容：
+
+    ## ENTRY D_HIS_006
+    - 问题：员工分工结构及人数
+    - 期望输出：请直接按下列 Markdown 表格结构输出员工专业分工结构及人数。
+      | 分类 | {FY-3}人数 | {FY-2}人数 | {FY-1}人数 | {FQ-1}人数 | {FQ0/FY0}人数 | 备注 |
+      | --- | --- | --- | --- | --- | --- | --- |
+      | 销售 |  |  |  |  |  |  |
+      | 生产 |  |  |  |  |  |  |
+      | 研发 |  |  |  |  |  |  |
+      | 管理 |  |  |  |  |  |  |
+      | 其他 |  |  |  |  |  |  |
+    - 输出内容：
+
+    ## ENTRY D_HIS_007
+    - 问题：员工分工结构及人数
+    - 期望输出：请直接按下列 Markdown 表格结构输出员工学历分布及人数。
+      | 学历分类 | {FY-3}人数 | {FY-2}人数 | {FY-1}人数 | {FQ-1}人数 | {FQ0/FY0}人数 | 备注 |
+      | --- | --- | --- | --- | --- | --- | --- |
+      | 本科以下 |  |  |  |  |  |  |
+      | 本科 |  |  |  |  |  |  |
+      | 硕士 |  |  |  |  |  |  |
+      | 博士 |  |  |  |  |  |  |
+    - 输出内容：
+
+    ## ENTRY F_HIS_038
+    - 问题：关联方清单
+    - 期望输出：主要关联方名称、关系类型、主营业务。
+    - 输出内容：
+
+    ## ENTRY F_HIS_039
+    - 问题：同业竞争情况
+    - 期望输出：控股股东控制的企业是否存在同业竞争。
+    - 输出内容：
+
+    ## ENTRY F_HIS_040
+    - 问题：关联交易占比情况
+    - 期望输出：关联交易占公司收入/采购/费用的比例。
+    - 输出内容：
+
+    ## ENTRY F_HIS_041
+    - 问题：关联方资金占用
+    - 期望输出：是否存在关联方占用公司资金的情况。
+    - 输出内容：
+
+  agent: extract_agent
+  output_file: '{file_source_output_path}'
+search_public_sources:
   description: |-
-    基于 `extract_file_facts` 的候选 patch 报告，执行 extract 结果的 registry 落账与修订任务。
-
+    请为{company_name}的历史与背景分析包生成 Search Source Markdown。
     输入：
-    - 当前责任 crew：{owner_crew}
-    - 当前专题焦点：{pack_focus}
-    - 返工反馈：{qa_feedback}
-    - 上游上下文：`extract_file_facts` 的候选 patch 报告
+    - 输出路径：{search_source_output_path}
 
     执行要求：
-    - 先用 `read_registry` 按 `owner_crew="{owner_crew}"` 读取当前 crew 的现有条目和需要返工的 `entry_id`。
-    - 只负责把上游已整理好的候选 patch 写回 registry，不再重新发散搜索，也不重新通读 PDF。
-    - 对 `existing_entry_updates` 中的候选，优先使用 `update_entry` amend 既有 `entry_id`；必要时补齐 `unit`、`period`、`source`、`confidence`。
-    - 对 `content_type="table"` 的条目，按 `columns` 完整更新表格行，不要只补半行字段。
-    - 只有确认现有条目不存在语义匹配槽位时，才允许使用 `add_entry` 新建条目。
-    - 调用 `add_entry` 或 `update_entry` 时，`topic` 只能填写规范英文 token：`history / industry / business / peer_info / financial / operating_metrics / risk`；不要填写中文包名、`{pack_title}`、`xx分析包` 或 `xx研究包`。
-    - 对新增或实质更新后的结论，必须补 `add_evidence`；必要时用 `status_update` 写清 `revision_detail`。
-    - 如果 `qa_feedback` 非空，优先关闭其中属于 PDF 提取与原文核对的缺口；无法关闭的条目要明确保留为 `need_revision`。
-    - 任务结束前必须调用 `registry_review` 留痕，说明本轮 amend 了哪些条目、是否新建条目，以及哪些缺口仍未关闭。
-  expected_output: |-
-    面向 manager 的落账结果摘要：
-    - 已 amend 的 `entry_id` 列表与关键更新字段
-    - 已新建的 `entry_id` 列表与新增原因
-    - 仍未关闭的缺口与原因
-    - 建议下一步交回 `extract`、`search` 还是直接进入 `qa` 的事项
-  agent: extract_file_fact_agent
-search_facts:
+    - 只使用公开资料搜索，不要回到 PDF 原文。
+    - 严格按照 expected_output 的 ENTRY 结构逐条输出，并保留 entry_id。
+    - 输出内容必须基于搜索结果中的原始信息，原则上不更改搜索的信息，尽量不选取材料中广告成分较大的部分。
+    - 每个条目都必须完整保留 entry_id，并按“期望输出”要求的字段和格式填写“输出内容”。
+    - 如果没有信息或该问题不适用该公司，也必须保留 entry_id，并在输出内容里输出“无信息”或“不适用”。一个entry有多个小问，部分可以回答，部分不可以回答，明确区分开。
+    - 不要输出最终 pack，不要改写其他专题内容。
+    - 最终只输出 Markdown 正文。
+  expected_output: |
+    # {company_name} 历史与背景分析包 Search Source
+    ## ENTRY F_HIS_001
+    - 问题：公司全称与简称
+    - 期望输出：全称、简称、证券代码、英文名称。
+    - 输出内容：
+
+    ## ENTRY F_HIS_002
+    - 问题：地址
+    - 期望输出：注册地址、总部地址等
+    - 输出内容：
+
+    ## ENTRY F_HIS_003
+    - 问题：里程碑日期
+    - 期望输出：成立日期、股改日期（如适用）、提交上市材料日期（如有）、拟发行日期（如有）。
+    - 输出内容：
+
+    ## ENTRY F_HIS_004
+    - 问题：法定代表人
+    - 期望输出：现任法定代表人及任职起始时间。
+    - 输出内容：
+
+    ## ENTRY F_HIS_005
+    - 问题：注册资本
+    - 期望输出：注册资本金额、实缴情况。
+    - 输出内容：
+
+    ## ENTRY F_HIS_006
+    - 问题：统一社会信用代码
+    - 期望输出：统一社会信用代码/营业执照编号。
+    - 输出内容：
+
+    ## ENTRY F_HIS_007
+    - 问题：上市/挂牌状态
+    - 期望输出：上市交易所、板块、上市日期。如果未上市，输出“未上市”。
+    - 输出内容：
+
+    ## ENTRY F_HIS_009
+    - 问题：公司定位一句话描述
+    - 期望输出：用一句话概括公司是做什么的、服务谁、核心价值是什么。
+    - 输出内容：
+
+    ## ENTRY F_HIS_010
+    - 问题：设立背景与方式
+    - 期望输出：从材料中截取公司前身、设立方式（发起/改制）、原始出资方及出资方式的相关信息，可以比较详细。
+    - 输出内容：
+
+    ## ENTRY F_HIS_011
+    - 问题：历史里程碑时间线
+    - 期望输出：请直接按下列 Markdown 表格结构输出上市、并购、扩产、融资等关键事件时间线。
+      | 时间 | 事件类型 | 简要描述 | 重要性原因 |
+      | --- | --- | --- | --- |
+      |  |  |  |  |
+    - 输出内容：
+
+    ## ENTRY F_HIS_012
+    - 问题：历次重大重组/并购
+    - 期望输出：请直接按下列 Markdown 表格结构输出历史重大资产重组、业务重组和并购事件。
+      | 时间 | 交易简要描述 | 涉及业务/资产 | 交易对方 | 交易金额（如有披露） | 对公司发展的影响 |
+      | --- | --- | --- | --- | --- | --- |
+      |  |  |  |  |  |  |
+    - 输出内容：
+
+    ## ENTRY F_HIS_013
+    - 问题：历史战略转型
+    - 期望输出：请直接按下列 Markdown 表格结构输出主营业务转型历史、商业模式变革及驱动因素。
+      | 时间 | 转型前主营业务/商业模式 | 转型后主营业务/商业模式 | 驱动因素 |
+      | --- | --- | --- | --- |
+      |  |  |  |  |
+    - 输出内容：
+
+    ## ENTRY F_HIS_014
+    - 问题：历史上的重大融资事件
+    - 期望输出：请直接按下列 Markdown 表格结构输出 IPO、增发、配股、可转债等历史融资事项。
+      | 时间 | 融资类型 | 发行比例（如有披露） | 融资金额（如有披露） | 融资估值（投后，如有披露） | 主要投资者（如有披露） | 融资目的及影响 |
+      | --- | --- | --- | --- | --- | --- | --- |
+      |  |  |  |  |  |  |  |
+    - 输出内容：
+
+    ## ENTRY F_HIS_015
+    - 问题：历史上的重大诉讼/处罚
+    - 期望输出：请直接按下列 Markdown 表格结构输出历史重大诉讼、行政处罚及其解决情况。
+      | 时间 | 案件/处罚简要描述 | 涉及金额（如有披露） | 当前状态 | 对公司的影响 |
+      | --- | --- | --- | --- | --- |
+      |  |  |  |  |  |
+    - 输出内容：
+
+    ## ENTRY D_HIS_001
+    - 问题：前十大股东持股明细
+    - 期望输出：请直接按下列 Markdown 表格结构输出前十大股东持股明细。
+      | 排名 | 股东名称 | 持股数量 | 持股比例 | 股份性质 |
+      | --- | --- | --- | --- | --- |
+      |  |  |  |  |  |
+    - 输出内容：
+
+    ## ENTRY F_HIS_017
+    - 问题：实际控制人与控股股东
+    - 期望输出：实际控制人名称及控制链条、控股股东名称、持股比例及一致行动人（action in cohert)。实际控制人的个人履历、从业背景。
+    - 输出内容：
+
+    ## ENTRY F_HIS_019
+    - 问题：控股股东主营业务
+    - 期望输出：控股股东除{company_name}以外的主要业务、资产规模及财务状况。如果控股股东是一个企业集团，尽量列示该集团的整体情况以及与{company_name}的关系。
+    - 输出内容：
+
+    ## ENTRY F_HIS_020
+    - 问题：公司与控股股东之间的关系
+    - 期望输出：控股股东资产负债率、是否存在资金紧张、公司与控股股东之间是否存在资金依赖。
+    - 输出内容：
+
+    ## ENTRY F_HIS_021
+    - 问题：股东权力受限
+    - 期望输出：控股股东或主要股东持股是否存在质押、冻结或其他权利受限情况。
+    - 输出内容：
+
+    ## ENTRY F_HIS_023
+    - 问题：对赌协议情况
+    - 期望输出：是否存在对赌协议、业绩承诺及解除情况。
+    - 输出内容：
+
+    ## ENTRY F_HIS_024
+    - 问题：股权激励计划
+    - 期望输出：员工持股计划、限制性股票、股票期权安排。股权激励覆盖的人数、层级及解锁条件。
+    - 输出内容：
+
+    ## ENTRY F_HIS_029
+    - 问题：董事会
+    - 期望输出：请直接按下列 Markdown 表格结构输出董事会信息。
+      | 姓名 | 任职 | 专业委员会任职 | 简历或背景 |
+      | --- | --- | --- | --- |
+      |  |  |  |  |
+    - 输出内容：
+
+    ## ENTRY F_HIS_031
+    - 问题：高级管理层
+    - 期望输出：请直接按下列 Markdown 表格结构输出高级管理层信息。
+      | 姓名 | 任职 | 简历或背景 | 薪酬 |
+      | --- | --- | --- | --- |
+      |  |  |  |  |
+    - 输出内容：
+
+    ## ENTRY F_HIS_032
+    - 问题：管理层变动
+    - 期望输出：近期内管理层变动情况，是否有重大人事调整。
+    - 输出内容：
+
+    ## ENTRY F_HIS_033
+    - 问题：管理层兼职情况
+    - 期望输出：董监高是否在关联方或同业兼职。
+    - 输出内容：
+
+    ## ENTRY D_HIS_004
+    - 问题：主要控股子公司
+    - 期望输出：请直接按下列 Markdown 表格结构输出主要控股子公司信息。
+      | 子公司名称 | 持股比例 | 主营业务情况 | 财务贡献 |
+      | --- | --- | --- | --- |
+      |  |  |  |  |
+    - 输出内容：
+
+    ## ENTRY D_HIS_005
+    - 问题：参股公司
+    - 期望输出：请直接按下列 Markdown 表格结构输出参股公司信息。
+      | 参股公司名称 | 主营业务 | 持股比例 |
+      | --- | --- | --- |
+      |  |  |  |
+    - 输出内容：
+
+    ## ENTRY D_HIS_006
+    - 问题：员工分工结构及人数
+    - 期望输出：请直接按下列 Markdown 表格结构输出员工专业分工结构及人数。
+      | 分类 | {FY-3}人数 | {FY-2}人数 | {FY-1}人数 | {FQ-1}人数 | {FQ0/FY0}人数 | 备注 |
+      | --- | --- | --- | --- | --- | --- | --- |
+      | 销售 |  |  |  |  |  |  |
+      | 生产 |  |  |  |  |  |  |
+      | 研发 |  |  |  |  |  |  |
+      | 管理 |  |  |  |  |  |  |
+      | 其他 |  |  |  |  |  |  |
+    - 输出内容：
+
+    ## ENTRY D_HIS_007
+    - 问题：员工分工结构及人数
+    - 期望输出：请直接按下列 Markdown 表格结构输出员工学历分布及人数。
+      | 学历分类 | {FY-3}人数 | {FY-2}人数 | {FY-1}人数 | {FQ-1}人数 | {FQ0/FY0}人数 | 备注 |
+      | --- | --- | --- | --- | --- | --- | --- |
+      | 本科以下 |  |  |  |  |  |  |
+      | 本科 |  |  |  |  |  |  |
+      | 硕士 |  |  |  |  |  |  |
+      | 博士 |  |  |  |  |  |  |
+    - 输出内容：
+
+    ## ENTRY F_HIS_038
+    - 问题：关联方清单
+    - 期望输出：主要关联方名称、关系类型、主营业务。
+    - 输出内容：
+
+    ## ENTRY F_HIS_039
+    - 问题：同业竞争情况
+    - 期望输出：控股股东控制的企业是否存在同业竞争。
+    - 输出内容：
+
+    ## ENTRY F_HIS_040
+    - 问题：关联交易占比情况
+    - 期望输出：关联交易占公司收入/采购/费用的比例。
+    - 输出内容：
+
+    ## ENTRY F_HIS_041
+    - 问题：关联方资金占用
+    - 期望输出：是否存在关联方占用公司资金的情况。
+    - 输出内容：
+
+  agent: search_agent
+  output_file: '{search_source_output_path}'
+synthesize_and_output:
   crew_name: history_background_crew
   pack_name: history_background_pack
   pack_title: 历史与背景分析包
-  pack_focus: 围绕公司沿革、发展时间线、股权结构、实际控制人、董监高和治理结构完成历史与背景专题研究。
-  output_title: 历史与背景分析包
-  search_guidance: 外部搜索只用于补充工商变更、股权穿透、关联方交易和历史诉讼等背景信息；主证据应优先来自公司披露材料。
   description: |-
-    围绕 {company_name} 的 {pack_title} 执行外部搜索候选采集任务。
-
+    请基于 {company_name} 当前专题的两份 source md 输出 历史与背景分析包。
     输入：
-    - 行业：{industry}
-    - 当前责任 crew：{owner_crew}
-    - 当前专题焦点：{pack_focus}
-    - 返工反馈：{qa_feedback}
+    - File Source：由 extract_from_pdf 生成，路径为 {file_source_output_path}
+    - Search Source：由 search_public_sources 生成，路径为 {search_source_output_path}
+    - 输出路径：{pack_output_path}
 
     执行要求：
-    - 先用 `read_registry` 按 `owner_crew="{owner_crew}"` 读取当前 crew 的条目清单，优先关注 `unchecked / need_revision` 的 `high / medium` 条目。
-    - 只有在已经通过 `read_registry` 拿到具体 `entry_id` 后，才允许继续用 `view="entry_detail"` 下钻；禁止在 `entry_id` 为空时直接调用该视图。
-    - 只处理当前 crew 负责的条目和与之直接相关的新发现，不要越权补写其他 pack。
-    - {search_guidance}
-    - 如果 `qa_feedback` 非空，优先回应其中属于外部搜索补证的缺口；被标成 `need_revision` 的条目要结合 `revision_detail` 输出定向修订建议。
-    - 你的职责是生成“候选 patch 报告”，而不是直接调用 `update_entry`、`add_entry`、`add_evidence` 或 `status_update`。
-    - 对每个候选更新，优先匹配已有 `entry_id`，明确写出拟更新字段、来源摘要、时间口径和置信度；只有确认现有条目没有语义匹配槽位时，才把它列入 `new_entry_candidates`。
-    - 如果外部资料彼此冲突，必须写清冲突来源、冲突点和当前判断，不能静默忽略。
-    - 如果没有搜到可靠资料，明确写“未搜索到信息”，并把缺口归入 `unresolved_gaps`。
-    - 任务结束时只输出供 `record_search_registry` 落账的候选 patch 报告，不直接写 registry。
-  expected_output: |-
-    面向 manager 和后续 record task 的候选 patch 报告，必须严格包含以下三段：
-    1. `existing_entry_updates`：逐条列出建议 amend 的 `entry_id`、拟更新字段、建议值、来源摘要、时间口径、置信度，以及是否涉及冲突。
-    2. `new_entry_candidates`：仅列出确认没有现有语义匹配槽位的新增候选，写明建议 `entry_type`、标题、核心内容、来源摘要和为什么不能并入旧条目。
-    3. `unresolved_gaps`：列出仍未解决的缺口、缺失原因、建议下一步走 `extract` 还是 `search`，以及是否影响后续综合输出。
-  agent: search_fact_agent
-record_search_registry:
-  description: |-
-    基于 `search_facts` 的候选 patch 报告，执行 search 结果的 registry 落账与修订任务。
+    - 只基于带 entry_id 的两份 source md 进行综合。
+    - 对 source 中缺失或冲突的信息要显式写出边界。
 
-    输入：
-    - 当前责任 crew：{owner_crew}
-    - 当前专题焦点：{pack_focus}
-    - 返工反馈：{qa_feedback}
-    - 上游上下文：`search_facts` 的候选 patch 报告
-
-    执行要求：
-    - 先用 `read_registry` 按 `owner_crew="{owner_crew}"` 读取当前 crew 的现有条目和需要返工的 `entry_id`。
-    - 只负责把上游已整理好的候选 patch 写回 registry，不再重新发散搜索。
-    - 对 `existing_entry_updates` 中的候选，优先使用 `update_entry` amend 既有 `entry_id`；必要时补齐 `unit`、`period`、`source`、`confidence`。
-    - 对 `content_type="table"` 的条目，按 `columns` 完整更新表格行，不要只补半行字段。
-    - 只有确认现有条目不存在语义匹配槽位时，才允许使用 `add_entry` 新建条目。
-    - 调用 `add_entry` 或 `update_entry` 时，`topic` 只能填写规范英文 token：`history / industry / business / peer_info / financial / operating_metrics / risk`；不要填写中文包名、`{pack_title}`、`xx分析包` 或 `xx研究包`。
-    - 对新增或实质更新后的结论，必须补 `add_evidence`；必要时用 `status_update` 写清 `revision_detail`。
-    - 如果 `qa_feedback` 非空，优先关闭其中属于外部搜索补证的缺口；无法关闭的条目要明确保留为 `need_revision`。
-    - 任务结束前必须调用 `registry_review` 留痕，说明本轮 amend 了哪些条目、是否新建条目，以及哪些缺口仍未关闭。
-  expected_output: |-
-    面向 manager 的落账结果摘要：
-    - 已 amend 的 `entry_id` 列表与关键更新字段
-    - 已新建的 `entry_id` 列表与新增原因
-    - 仍未关闭的缺口与原因
-    - 建议下一步交回 `extract`、`search` 还是直接进入 `qa` 的事项
-  agent: search_fact_agent
-check_registry:
-  qa_guidance: 确认实控人链条、股权穿透、董监高独立性和关联交易是否有完整可验证记录，而不只是公司自述。
-  description: |-
-    检查 {company_name} 的 {pack_title} 当前 registry 是否已经达到可综合输出的最低要求。
-
-    执行要求：
-    - 先用 `read_registry` 按 `owner_crew="{owner_crew}"` 读取当前 crew 的条目，并重点审查 `record_extract_registry` 与 `record_search_registry` 刚完成 amend 的结果。
-    - {qa_guidance}
-    - 找出仍是 `unchecked / need_revision` 的关键条目，尤其是 `high / medium` 优先级。
-    - 如果发现遗漏，使用 `status_update` 补充更具体的 `revision_detail`，并在 `registry_review` 里写明建议回退给 `extract` 还是 `search`。
-    - 你不负责新增正文内容；你只负责检查、标记和留痕。
-    - 任务结束前必须调用 `registry_review` 留痕。
-  expected_output: |-
-    严格输出 JSON 对象，包含以下字段：
-    - pack_name: 当前分析包名称（字符串）
-    - overall_status: "ready" 或 "not_ready"
-    - issues: 未通过条目列表，每项包含 entry_id、issue_type（枚举：missing_content / need_revision / source_conflict / incomplete_table）、detail
-    - revision_suggestions: 修订建议列表（字符串数组）
-    - recommended_rework_stage: "extract"、"search" 或 "none"
-    - summary: 一段话总结检查结论
-    ready 时 issues 应为空、recommended_rework_stage 应为 "none"。
-  agent: qa_check_agent
-synthesize_and_output:
-  synthesize_guidance: 输出要突出公司发展脉络、治理结构完整性、潜在治理风险（如实控人过度集中、关联交易）和仍待验证事项。
-  output_skeleton: |
+    - 最终 pack 不要求逐条保留 entry_id，但结论必须能追溯回 source。
+    - 最终只输出 Markdown 正文。
+  expected_output: |
     严格按下列格式形成一份结构化文本，严格使用下列标题作为标题，不得遗漏以下任何一个标题，不要增加任何标题和分节。必要时可以补充表格辅助阅读。
     每节要求写明：内容 / 来源 / 待确认事项。
 
@@ -165,24 +498,5 @@ synthesize_and_output:
     ## 6. 待确认事项
     - 6.1 仍缺乏验证的关键信息
     - 6.2 信息冲突与待解决问题
-  description: |-
-    基于 registry 中 {company_name} 的 {pack_title} 生成最终 Markdown 分析包。
-
-    输入：
-    - 行业：{industry}
-    - 输出路径：{pack_output_path}
-    - 当前专题焦点：{pack_focus}
-
-    执行要求：
-    - 先用 `read_registry` 按 `owner_crew="{owner_crew}"` 读取当前 crew 的全部条目；只有在已经通过 `read_registry` 拿到具体 `entry_id` 后，才允许继续用 `view="entry_detail"` 下钻关键条目。
-    - 只综合当前 crew 负责的事实、数据、judgment 和相关证据，不得越权引用其他 pack 的未沉淀内容。
-    - 本任务是严格只读综合：不得调用 `update_entry`、`add_entry`、`add_evidence` 或 `status_update` 修改 entry 内容、状态或证据。
-    - 如果 `high / medium` 条目仍是 `unchecked / need_revision`，必须在正文和 `registry_review` 里显式写出缺口、影响和建议补证方向，不能偷偷补写 registry。
-    - 明确区分：已被证据支持、存在冲突、仍未解决。
-    - 如果存在冲突，要写明冲突点和严重程度，不要静默忽略。
-    - {synthesize_guidance}
-    - 任务结束前必须调用 `registry_review` 留痕，说明本轮综合输出是否仍有残余缺口。
-  expected_output: |
-    {output_skeleton}
   agent: synthesizing_agent
   output_file: '{pack_output_path}'

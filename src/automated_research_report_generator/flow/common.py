@@ -14,7 +14,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 CACHE_ROOT = PROJECT_ROOT / ".cache"
-DEFAULT_PDF_PATH = PROJECT_ROOT / "pdf" / "博瑞迪商业计划书v1.0.pdf"
+DEFAULT_PDF_PATH = PROJECT_ROOT / "pdf" / "sehk26033003882_c.pdf"
 CREWAI_MEMORY_DIR = PROJECT_ROOT / "crewai_memory"
 RUN_ARTIFACT_DIR_NAME = "md"
 RUN_LOG_DIR_NAME = "logs"
@@ -38,6 +38,7 @@ CREW_LOG_NAMES = (
     "financial_crew",
     "operating_metrics_crew",
     "risk_crew",
+    "due_diligence_crew",
     "valuation_crew",
     "investment_thesis_crew",
     "writeup_crew",
@@ -200,18 +201,6 @@ def append_text_log_chunk(path: Path | str, text: str) -> str:
     return normalize_path(resolved)
 
 
-def run_artifact_dir(run_slug: str) -> Path:
-    """
-    目的：统一取得单次 run 的中间产物目录。
-    功能：返回 `.cache/<run_slug>/md/` 对应目录，并确保目录存在。
-    实现逻辑：基于 `CACHE_ROOT` 和 `RUN_ARTIFACT_DIR_NAME` 拼出固定路径。
-    可调参数：`run_slug`。
-    默认参数及原因：目录名固定为 `md`，原因是这里同时存 Markdown 和相关 JSON 中间产物。
-    """
-
-    return ensure_directory(CACHE_ROOT / run_slug / RUN_ARTIFACT_DIR_NAME)
-
-
 def run_log_dir(run_slug: str) -> Path:
     """
     目的：统一取得单次 run 的日志目录。
@@ -253,18 +242,6 @@ def append_preprocess_log_line(message: str) -> str:
     return append_text_log_line(_ACTIVE_PREPROCESS_LOG_PATH, message)
 
 
-def run_flow_log_path(run_slug: str) -> str:
-    """
-    目的：给 Flow 主过程生成固定日志文件路径。
-    功能：返回 `.cache/<run_slug>/logs/flow.txt` 的标准化字符串路径。
-    实现逻辑：先拿到 run 级日志目录，再拼固定文件名。
-    可调参数：`run_slug`。
-    默认参数及原因：文件名固定为 `flow.txt`，原因是目录已经按 run 隔离，文件名应尽量直接。
-    """
-
-    return normalize_path(run_log_dir(run_slug) / RUN_FLOW_LOG_FILE_NAME)
-
-
 def run_console_log_path(run_slug: str) -> str:
     """
     目的：给单次 run 的终端 transcript 生成固定日志路径。
@@ -277,28 +254,18 @@ def run_console_log_path(run_slug: str) -> str:
     return normalize_path(run_log_dir(run_slug) / RUN_CONSOLE_LOG_FILE_NAME)
 
 
-def run_crew_log_path(run_slug: str, crew_name: str) -> str:
-    """
-    目的：给单个 crew 生成固定日志路径。
-    功能：返回 `.cache/<run_slug>/logs/<crew_name>.txt` 的标准化字符串路径。
-    实现逻辑：在 run 日志目录下直接按 crew 名组装文件名。
-    可调参数：`run_slug` 和 `crew_name`。
-    默认参数及原因：默认每个 crew 单独一份文件，原因是阶段排查比混在一份大日志里更清楚。
-    """
-
-    return normalize_path(run_log_dir(run_slug) / f"{crew_name}.txt")
-
-
 def write_run_debug_manifest(
     *,
     run_slug: str,
     status: str,
     pdf_file_path: str,
     run_cache_dir: str,
-    evidence_registry_path: str = "",
-    registry_snapshot_markdown_path: str = "",
+    analysis_source_dir: str = "",
+    analysis_source_paths: dict[str, str] | None = None,
     page_index_file_path: str = "",
     document_metadata_file_path: str = "",
+    investment_thesis_path: str = "",
+    diligence_questions_path: str = "",
     final_report_markdown_path: str = "",
     final_report_pdf_path: str = "",
     failed_stage: str = "",
@@ -315,7 +282,7 @@ def write_run_debug_manifest(
     默认参数及原因：缺失路径默认写空串，原因是同一份 manifest 既要兼容运行中，也要兼容运行完成后。
     """
 
-    artifact_dir = run_artifact_dir(run_slug)
+    artifact_dir = ensure_directory(CACHE_ROOT / run_slug / RUN_ARTIFACT_DIR_NAME)
     log_dir = run_log_dir(run_slug)
     flow_log_file_path = normalize_path(log_dir / RUN_FLOW_LOG_FILE_NAME)
     preprocess_log_file_path = normalize_path(log_dir / RUN_PREPROCESS_LOG_FILE_NAME)
@@ -331,14 +298,17 @@ def write_run_debug_manifest(
         "run_cache_dir": normalize_path(run_cache_dir),
         "run_artifact_dir": normalize_path(artifact_dir),
         "run_log_dir": normalize_path(log_dir),
-        "evidence_registry_path": normalize_path(evidence_registry_path) if evidence_registry_path else "",
-        "registry_snapshot_markdown_path": (
-            normalize_path(registry_snapshot_markdown_path) if registry_snapshot_markdown_path else ""
-        ),
+        "analysis_source_dir": normalize_path(analysis_source_dir) if analysis_source_dir else "",
+        "analysis_source_paths": {
+            key: normalize_path(value) if value else ""
+            for key, value in (analysis_source_paths or {}).items()
+        },
         "page_index_file_path": normalize_path(page_index_file_path) if page_index_file_path else "",
         "document_metadata_file_path": (
             normalize_path(document_metadata_file_path) if document_metadata_file_path else ""
         ),
+        "investment_thesis_path": normalize_path(investment_thesis_path) if investment_thesis_path else "",
+        "diligence_questions_path": normalize_path(diligence_questions_path) if diligence_questions_path else "",
         "final_report_markdown_path": (
             normalize_path(final_report_markdown_path) if final_report_markdown_path else ""
         ),

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 
@@ -166,6 +167,163 @@ def test_resolve_pdf_document_metadata_payload_does_not_touch_default_cache_path
     assert payload.company_name == "测试公司"
     assert payload.industry == "测试行业"
     assert payload.source_pages == [1]
+
+
+def test_document_metadata_payload_uses_fy_fq_placeholder_defaults() -> None:
+    """
+    设计目的：锁住 metadata payload 的默认期间占位符集合。
+    模块功能：验证默认 `periods` 只包含新的 FY/FQ 语义占位符，不再保留旧期间编号。
+    实现逻辑：直接构造最小 payload，并检查默认字典键集合。
+    可调参数：无。
+    默认参数及原因：使用最小必填字段，原因是这里只验证默认结构而非识别流程。
+    """
+
+    payload = document_metadata_module.PdfDocumentMetadataPayload(
+        pdf_file_path="sample.pdf",
+        generated_at="2026-04-15T00:00:00+08:00",
+        fingerprint="fake-fingerprint",
+        company_name="测试公司",
+        industry="测试行业",
+        source_pages=[1],
+    )
+
+    assert payload.periods == {
+        "{FQ0/FY0}": "",
+        "{FQ-1}": "",
+        "{FY-1}": "",
+        "{FY-2}": "",
+        "{FY-3}": "",
+        "{FY1}": "",
+        "{FY2}": "",
+        "{FY3}": "",
+        "{FY4}": "",
+        "{FY5}": "",
+    }
+
+
+def test_extract_metadata_from_raw_parses_new_fy_fq_keys() -> None:
+    """
+    设计目的：锁住 raw JSON 回退解析对新 FY/FQ 字段的支持。
+    模块功能：验证 `_extract_metadata_from_raw()` 会把新语义字段映射成统一占位符字典。
+    实现逻辑：传入最小 JSON 字符串，直接断言返回值。
+    可调参数：无。
+    默认参数及原因：只覆盖关键字段组合，原因是目标是锁住新字段命名而不是穷举所有分支。
+    """
+
+    company_name, industry, periods = document_metadata_module._extract_metadata_from_raw(
+        json.dumps(
+            {
+                "company_name": "测试公司",
+                "industry": "测试行业",
+                "fq0_or_fy0": "2025Q1A",
+                "fq_minus_1": "2024Q1A",
+                "fy_minus_1": "2024A",
+                "fy_minus_2": "2023A",
+                "fy_minus_3": "2022A",
+                "fy_1": "2026E",
+                "fy_2": "2027E",
+            },
+            ensure_ascii=False,
+        )
+    )
+
+    assert company_name == "测试公司"
+    assert industry == "测试行业"
+    assert periods == {
+        "{FQ0/FY0}": "2025Q1A",
+        "{FQ-1}": "2024Q1A",
+        "{FY-1}": "2024A",
+        "{FY-2}": "2023A",
+        "{FY-3}": "2022A",
+        "{FY1}": "2026E",
+        "{FY2}": "2027E",
+    }
+
+
+def test_summarize_document_metadata_maps_new_fy_fq_fields(tmp_path, monkeypatch) -> None:
+    """
+    设计目的：锁住 metadata 结构化识别结果到占位符字典的映射规则。
+    模块功能：验证 `summarize_document_metadata()` 会把新字段写入统一的 `periods`。
+    实现逻辑：构造假的 agent 返回新 `PdfDocumentMetadata`，再检查输出 payload。
+    可调参数：`tmp_path` 与 `monkeypatch` 由 pytest 提供。
+    默认参数及原因：默认使用最小假 PDF 和固定指纹，原因是这里只验证字段映射而不是文件处理。
+    """
+
+    class FakeResult:
+        """
+        设计目的：给 metadata 汇总测试提供最小返回对象。
+        模块功能：模拟 `agent.kickoff()` 的返回结构。
+        实现逻辑：只暴露 `pydantic` 与 `raw` 两个当前用到的属性。
+        可调参数：无。
+        默认参数及原因：固定为测试需要的最小字段，原因是便于聚焦映射逻辑。
+        """
+
+        def __init__(self) -> None:
+            """
+            设计目的：初始化固定的结构化返回内容。
+            模块功能：把测试所需的 metadata 字段挂到实例上。
+            实现逻辑：直接写死 `pydantic` 和 `raw`，避免引入额外依赖。
+            可调参数：无。
+            默认参数及原因：固定写死，原因是这里只验证映射行为。
+            """
+
+            self.pydantic = document_metadata_module.PdfDocumentMetadata(
+                company_name="测试公司",
+                industry="测试行业",
+                fq0_or_fy0="2025Q1A",
+                fq_minus_1="2024Q1A",
+                fy_minus_1="2024A",
+                fy_minus_2="2023A",
+                fy_minus_3="2022A",
+                fy_1="2026E",
+                fy_2="2027E",
+                fy_3="2028E",
+            )
+            self.raw = ""
+
+    class FakeAgent:
+        """
+        设计目的：给 metadata 汇总测试提供最小 agent 替身。
+        模块功能：返回固定的结构化结果。
+        实现逻辑：实现一个与真实 agent 兼容的 `kickoff()` 方法。
+        可调参数：无。
+        默认参数及原因：固定返回 `FakeResult`，原因是这里只验证汇总后的映射结果。
+        """
+
+        def kickoff(self, prompt, response_format=None):
+            """
+            设计目的：模拟真实 agent 的最小调用接口。
+            模块功能：返回固定的结构化结果对象。
+            实现逻辑：忽略输入参数，直接返回 `FakeResult`。
+            可调参数：prompt 与 response_format。
+            默认参数及原因：参数保留但不使用，原因是这里只关心返回值结构。
+            """
+
+            return FakeResult()
+
+    pdf_path = tmp_path / "sample.pdf"
+    pdf_path.write_text("stub pdf", encoding="utf-8")
+    monkeypatch.setattr(document_metadata_module, "compute_pdf_fingerprint", lambda _path: "fake-fingerprint")
+
+    payload = document_metadata_module.summarize_document_metadata(
+        agent=FakeAgent(),
+        pdf_file_path=pdf_path,
+        sampled_pages=[(1, "封面"), (2, "财务摘要")],
+    )
+
+    assert payload.company_name == "测试公司"
+    assert payload.industry == "测试行业"
+    assert payload.source_pages == [1, 2]
+    assert payload.periods == {
+        "{FQ0/FY0}": "2025Q1A",
+        "{FQ-1}": "2024Q1A",
+        "{FY-1}": "2024A",
+        "{FY-2}": "2023A",
+        "{FY-3}": "2022A",
+        "{FY1}": "2026E",
+        "{FY2}": "2027E",
+        "{FY3}": "2028E",
+    }
 
 
 def test_read_pdf_page_index_tool_uses_explicit_pdf_path(tmp_path) -> None:
