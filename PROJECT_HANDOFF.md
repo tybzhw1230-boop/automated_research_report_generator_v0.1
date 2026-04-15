@@ -14,6 +14,8 @@
 - 当前包名：`automated_research_report_generator`
 - 当前目标版本：`v0.3`
 - 当前 `pyproject.toml` 版本基线：`0.2.0`
+- 当前目标版本：`v0.3`
+- 当前 `pyproject.toml` 版本基线：`0.2.0`
 - 当前 CrewAI 依赖：`crewai[file-processing,google-genai,litellm,tools]==1.14.1`
 - 当前项目类型：`[tool.crewai].type = "flow"`
 - 当前运行目录类型保持为：`.cache/<run_slug>/md/...`

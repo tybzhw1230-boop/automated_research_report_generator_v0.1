@@ -1,4 +1,5 @@
 # Automated Research Report Generator v0.3
+# Automated Research Report Generator v0.3
 
 一个基于 CrewAI Flow 的买方研究报告生成项目。当前工作区处于 `v0.3` 的最小可跑通阶段，重点是把 source-based 主链、估值链路、投资逻辑链路和最终导出链路稳定下来。
 
