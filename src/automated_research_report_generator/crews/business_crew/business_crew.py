@@ -16,8 +16,6 @@ from automated_research_report_generator.tools.pdf_page_tools import (
     ReadPdfPagesTool,
 )
 
-PROJECT_LOG_DIR = PROJECT_ROOT / "logs"
-DEFAULT_CREW_LOG_FILE = str(PROJECT_LOG_DIR / "business_crew.json")
 ANALYSIS_PROFILE_KEYS = ("crew_name", "pack_name", "pack_title")
 
 
@@ -68,7 +66,7 @@ class BusinessCrew:
 
     agents_config = "config/agents.yaml"
     tasks_config = "config/tasks.yaml"
-    output_log_file_path: str | bool | None = DEFAULT_CREW_LOG_FILE
+    output_log_file_path: str | bool | None = str(PROJECT_ROOT / "logs" / "business_crew.json")
 
     crew_name = CREW_PROFILE["crew_name"]
     pack_name = CREW_PROFILE["pack_name"]

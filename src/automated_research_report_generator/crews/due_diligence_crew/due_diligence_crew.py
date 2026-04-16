@@ -15,10 +15,6 @@ from automated_research_report_generator.llm_config import get_heavy_llm
 # 实现逻辑：不再接入 registry 或 review 工具，只基于 Flow 传入的 pack 文本和 source 文本成文。
 # 可调参数：日志路径、模型温度和任务 YAML 配置。
 # 默认参数及原因：默认采用 `Process.sequential`，原因是当前 crew 只有一个单点输出任务。
-PROJECT_LOG_DIR = PROJECT_ROOT / "logs"
-DEFAULT_CREW_LOG_FILE = str(PROJECT_LOG_DIR / "due_diligence_crew.json")
-
-
 @CrewBase
 class DueDiligenceCrew:
     """
@@ -34,7 +30,7 @@ class DueDiligenceCrew:
 
     agents_config = "config/agents.yaml"
     tasks_config = "config/tasks.yaml"
-    output_log_file_path: str | bool | None = DEFAULT_CREW_LOG_FILE
+    output_log_file_path: str | bool | None = str(PROJECT_ROOT / "logs" / "due_diligence_crew.json")
 
     @agent
     def due_diligence_agent(self) -> Agent:

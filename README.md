@@ -153,6 +153,11 @@
 - `.cache/<run_slug>/md/run_manifest.json`
 - `.cache/<run_slug>/md/<pdf_stem>_v2_report.md`
 - `.cache/<run_slug>/md/<pdf_stem>_v2_report.pdf`
+- `.cache/live_tests/<suite_id>/`
+- `.cache/live_tests/<suite_id>/suite_summary.json`
+- `.cache/live_tests/<suite_id>/suite_summary.md`
+- `.cache/live_tests/<suite_id>/repair_backlog.md`
+- `.cache/live_tests/<suite_id>/cases/<case_id>/`
 
 `run_manifest.json` 当前重点记录：
 
@@ -231,6 +236,19 @@ uv run pytest -q test_src
 ```bash
 uv run python -c "from automated_research_report_generator.flow.research_flow import ResearchReportFlow; print('ok')"
 ```
+
+Live API 分段测试入口：
+
+```bash
+uv run python -m automated_research_report_generator.testing.live_runner --suite full --pdf pdf/sehk26033003882_c.pdf
+```
+
+说明：
+
+- live harness 会先跑 `uv run pytest -q test_src`，失败时后续 live case 记为 `blocked_precheck`
+- 组件级 case 使用 `test_src/live_fixtures/` 作为最小上游输入，链路级 case 才串真实上游输出
+- 每个 case 单独子进程执行，命中 loop guard 时会在对应 `cases/<case_id>/monitor/` 下落盘现场证据
+- 整轮结果统一写到 `.cache/live_tests/<suite_id>/`
 
 ## 文档导航
 

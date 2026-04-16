@@ -37,14 +37,6 @@ PAGE_INDEX_AGENT_BACKSTORY = (
     "你专门负责把长 PDF 拆成可检索的页面主题索引。"
     "你不写长分析，只输出结构稳定、便于筛页、能体现页面内容类型的主题概括和主题归类。"
 )
-PAGE_INDEX_AGENT_TEMPERATURE = 0.1
-PAGE_INDEX_AGENT_VERBOSE = True
-PAGE_INDEX_AGENT_ALLOW_DELEGATION = False
-PAGE_INDEX_AGENT_REASONING = False
-PAGE_INDEX_AGENT_CACHE = True
-PAGE_INDEX_AGENT_TIMEOUT_SECONDS = 20
-PAGE_INDEX_AGENT_MAX_RETRIES = 5
-
 PAGE_INDEX_TOPIC_MAX_CHARS = 30
 PAGE_INDEX_MATCHED_TOPICS_MAX_COUNT = 2
 PAGE_INDEX_UNKNOWN_COMPANY = "未知公司"
@@ -490,15 +482,15 @@ def summarize_page_topic(
                 goal=PAGE_INDEX_AGENT_GOAL,
                 backstory=PAGE_INDEX_AGENT_BACKSTORY,
                 llm=get_heavy_llm(
-                    temperature=PAGE_INDEX_AGENT_TEMPERATURE,
-                    timeout=PAGE_INDEX_AGENT_TIMEOUT_SECONDS,
-                    max_retries=PAGE_INDEX_AGENT_MAX_RETRIES,
+                    temperature=0.1,
+                    timeout=20,
+                    max_retries=5,
                 ),
-                verbose=PAGE_INDEX_AGENT_VERBOSE,
-                allow_delegation=PAGE_INDEX_AGENT_ALLOW_DELEGATION,
-                reasoning=PAGE_INDEX_AGENT_REASONING,
-                cache=PAGE_INDEX_AGENT_CACHE,
-                max_retry_limit=PAGE_INDEX_AGENT_MAX_RETRIES,
+                verbose=True,
+                allow_delegation=False,
+                reasoning=False,
+                cache=True,
+                max_retry_limit=5,
             )
             result = agent.kickoff(prompt)
             parsed_topic, parsed_topics = _extract_page_summary_from_result(

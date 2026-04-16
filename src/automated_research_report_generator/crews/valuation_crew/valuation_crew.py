@@ -21,9 +21,6 @@ from automated_research_report_generator.tools import (
 # 实现逻辑：估值阶段只消费 Flow 传入的专题 pack 与少量高价值中间结果，不再依赖 manager 二次调度或全量 source 输入。
 # 可调参数：估值 agent 的 temperature、max_iter 和 `output_log_file_path`。
 # 默认参数及原因：DCF 角色默认更低温度，原因是模型推导比文字判断更需要收敛。
-PROJECT_LOG_DIR = PROJECT_ROOT / "logs"
-DEFAULT_CREW_LOG_FILE = str(PROJECT_LOG_DIR / "valuation_crew.json")
-
 shared_tushare_valuation_data_tool = TushareValuationDataTool()
 
 
@@ -42,7 +39,7 @@ class ValuationCrew:
 
     agents_config = "config/agents.yaml"
     tasks_config = "config/tasks.yaml"
-    output_log_file_path: str | bool | None = DEFAULT_CREW_LOG_FILE
+    output_log_file_path: str | bool | None = str(PROJECT_ROOT / "logs" / "valuation_crew.json")
 
     @agent
     def peer_analyst(self) -> Agent:

@@ -219,6 +219,10 @@ analysis 目录额外保留：
 - `.cache/<run_slug>/md/run_manifest.json`
 - `.cache/<run_slug>/md/<pdf_stem>_v2_report.md`
 - `.cache/<run_slug>/md/<pdf_stem>_v2_report.pdf`
+- `.cache/live_tests/<suite_id>/suite_summary.json`
+- `.cache/live_tests/<suite_id>/suite_summary.md`
+- `.cache/live_tests/<suite_id>/repair_backlog.md`
+- `.cache/live_tests/<suite_id>/cases/<case_id>/`
 
 `run_manifest.json` 当前重点字段：
 
@@ -248,9 +252,18 @@ analysis 目录额外保留：
 - 当前目录骨架仍保持 `.cache/<run_slug>/md/...`
 - `uv run python -c "from automated_research_report_generator.flow.research_flow import ResearchReportFlow; print('ok')"`
   - 结果：`ok`
+- `uv run python -m automated_research_report_generator.testing.live_runner --help`
+  - 结果：命令行入口可导入并正确显示参数帮助
 - `uv run pytest -q test_src`
-  - 结果：`34 passed, 1 skipped`
+  - 结果：`41 passed, 1 skipped`
   - 备注：存在 CrewAI 上游的 deprecation warnings，但当前没有测试失败
+
+当前 live harness 入口：
+
+- `uv run python -m automated_research_report_generator.testing.live_runner --suite full --pdf <PDF路径>`
+- 组件级 case 走 `test_src/live_fixtures/`
+- 链路级 case 从真实 `prepare_evidence -> analysis -> valuation -> thesis -> publish` 顺序执行
+- 单 case 目录内会额外写 `monitor/events.jsonl`、`loop_alert.json`、`root_cause.md` 等现场证据
 
 当前没有已知的结构级 blocker。
 

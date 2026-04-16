@@ -17,10 +17,6 @@ from automated_research_report_generator.tools.markdown_to_pdf_tool import Markd
 # 可调参数：editor 的 temperature、max_iter 和 `output_log_file_path`。
 # 默认参数及原因：默认 `temperature=0.1`，原因是这一步只做确认和导出，不需要额外发散。
 
-PROJECT_LOG_DIR = PROJECT_ROOT / "logs"
-DEFAULT_CREW_LOG_FILE = str(PROJECT_LOG_DIR / "writeup_crew.json")
-
-
 @CrewBase
 class WriteupCrew:
     """
@@ -36,7 +32,7 @@ class WriteupCrew:
 
     agents_config = "config/agents.yaml"
     tasks_config = "config/tasks.yaml"
-    output_log_file_path: str | bool | None = DEFAULT_CREW_LOG_FILE
+    output_log_file_path: str | bool | None = str(PROJECT_ROOT / "logs" / "writeup_crew.json")
 
     @agent
     def report_editor(self) -> Agent:

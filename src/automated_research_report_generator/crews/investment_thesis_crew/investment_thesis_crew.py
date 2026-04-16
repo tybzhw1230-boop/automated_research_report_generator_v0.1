@@ -10,11 +10,6 @@ from crewai.project import CrewBase, agent, crew, task
 from automated_research_report_generator.flow.common import PROJECT_ROOT
 from automated_research_report_generator.llm_config import get_heavy_llm
 
-PROJECT_LOG_DIR = PROJECT_ROOT / "logs"
-DEFAULT_CREW_LOG_FILE = str(PROJECT_LOG_DIR / "investment_thesis_crew.json")
-INVESTMENT_THESIS_AGENT_REASONING = False
-
-
 @CrewBase
 class InvestmentThesisCrew:
     """
@@ -30,7 +25,7 @@ class InvestmentThesisCrew:
 
     agents_config = "config/agents.yaml"
     tasks_config = "config/tasks.yaml"
-    output_log_file_path: str | bool | None = DEFAULT_CREW_LOG_FILE
+    output_log_file_path: str | bool | None = str(PROJECT_ROOT / "logs" / "investment_thesis_crew.json")
 
     def _build_agent(self, config_name: str, temperature: float) -> Agent:
         """
@@ -57,7 +52,7 @@ class InvestmentThesisCrew:
             max_retry_limit=2,
             respect_context_window=True,
             use_system_prompt=True,
-            reasoning=INVESTMENT_THESIS_AGENT_REASONING,
+            reasoning=False,
             max_reasoning_attempts=None,
             inject_date=True,
         )

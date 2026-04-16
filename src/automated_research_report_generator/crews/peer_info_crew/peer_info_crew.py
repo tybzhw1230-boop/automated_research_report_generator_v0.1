@@ -13,8 +13,6 @@ from automated_research_report_generator.flow.common import PROJECT_ROOT
 from automated_research_report_generator.llm_config import get_heavy_llm, get_lite_llm
 from automated_research_report_generator.tools import TusharePeerDataTool
 
-PROJECT_LOG_DIR = PROJECT_ROOT / "logs"
-DEFAULT_CREW_LOG_FILE = str(PROJECT_LOG_DIR / "peer_info_crew.json")
 ANALYSIS_PROFILE_KEYS = ("crew_name", "pack_name", "pack_title")
 
 
@@ -65,7 +63,7 @@ class PeerInfoCrew:
 
     agents_config = "config/agents.yaml"
     tasks_config = "config/tasks.yaml"
-    output_log_file_path: str | bool | None = DEFAULT_CREW_LOG_FILE
+    output_log_file_path: str | bool | None = str(PROJECT_ROOT / "logs" / "peer_info_crew.json")
 
     crew_name = CREW_PROFILE["crew_name"]
     pack_name = CREW_PROFILE["pack_name"]

@@ -20,6 +20,32 @@ from automated_research_report_generator.tools.pdf_page_tools import (
 
 MAX_METADATA_SOURCE_PAGES = 20
 MAX_METADATA_PAGE_CHARS = 2500
+DOCUMENT_METADATA_PERIOD_PLACEHOLDER_KEYS = (
+    "{FQ0/FY0}",
+    "{FQ-1}",
+    "{FY-1}",
+    "{FY-2}",
+    "{FY-3}",
+    "{FY1}",
+    "{FY2}",
+    "{FY3}",
+    "{FY4}",
+    "{FY5}",
+)
+
+
+def document_metadata_periods_are_complete(periods: Any) -> bool:
+    """
+    目的：判断 metadata 里的 periods 结构是否满足当前版本的完整键集要求。
+    功能：校验 `periods` 是否为字典，且包含当前仓库约定的全部期间占位符键。
+    实现逻辑：先检查类型，再逐个检查必需键是否存在；缺任一键都视为旧缓存或坏结构。
+    可调参数：`periods` 可传入任意已解析 JSON 值。
+    默认参数及原因：非字典直接返回 False，原因是 periods 结构异常时应触发 metadata 重建。
+    """
+
+    if not isinstance(periods, dict):
+        return False
+    return all(period_key in periods for period_key in DOCUMENT_METADATA_PERIOD_PLACEHOLDER_KEYS)
 
 
 def load_document_metadata(metadata_path: str | Path) -> dict[str, Any]:
@@ -71,7 +97,10 @@ def document_metadata_is_current(pdf_file_path: str | Path, metadata_path: str |
     except (OSError, ValueError, json.JSONDecodeError):
         return False
 
-    return data.get("fingerprint") == compute_pdf_fingerprint(pdf_file_path)
+    if data.get("fingerprint") != compute_pdf_fingerprint(pdf_file_path):
+        return False
+
+    return document_metadata_periods_are_complete(data.get("periods"))
 
 
 def sample_document_metadata_pages(

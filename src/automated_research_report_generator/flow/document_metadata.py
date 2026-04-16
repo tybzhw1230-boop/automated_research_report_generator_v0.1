@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from automated_research_report_generator.llm_config import get_heavy_llm
 from automated_research_report_generator.tools.document_metadata_tools import (
+    DOCUMENT_METADATA_PERIOD_PLACEHOLDER_KEYS,
     document_metadata_is_current,
     load_document_metadata,
     sample_document_metadata_pages,
@@ -30,8 +31,6 @@ from automated_research_report_generator.tools.pdf_page_tools import compute_pdf
 # 实现逻辑：显式设为 `None`，避免重新引入只调用一次的路径封装。
 # 可调参数：当前无。
 # 默认参数及原因：默认留空占位，原因是运行时路径已直接在调用点展开。
-default_document_metadata_path = None
-
 DOCUMENT_METADATA_AGENT_ROLE = "PDF 文档基础信息识别专员"
 DOCUMENT_METADATA_AGENT_GOAL = (
     "读取 PDF 的关键页面，识别该文档对应的公司名称、所属行业和报告期间，供主流程自动补充输入参数。"
@@ -40,12 +39,6 @@ DOCUMENT_METADATA_AGENT_BACKSTORY = (
     "你专门负责在 PDF 的封面、目录、业务介绍、公司概览和财务报表等关键页面中识别公司名称、行业和报告期间。"
     "你不做长篇分析，只输出最核心的结构化基础信息。"
 )
-DOCUMENT_METADATA_AGENT_TEMPERATURE = 0.1
-DOCUMENT_METADATA_AGENT_VERBOSE = True
-DOCUMENT_METADATA_AGENT_ALLOW_DELEGATION = False
-DOCUMENT_METADATA_AGENT_REASONING = False
-DOCUMENT_METADATA_AGENT_CACHE = True
-
 DOCUMENT_METADATA_UNKNOWN_COMPANY = "未知公司"
 DOCUMENT_METADATA_UNKNOWN_INDUSTRY = "未知行业"
 DOCUMENT_METADATA_SAMPLE_MAX_PAGES = 15
@@ -106,20 +99,41 @@ class PdfDocumentMetadataPayload(BaseModel):
     industry: str
     source_pages: list[int]
     periods: dict[str, str] = Field(
-        default_factory=lambda: {
-            "{FQ0/FY0}": "",
-            "{FQ-1}": "",
-            "{FY-1}": "",
-            "{FY-2}": "",
-            "{FY-3}": "",
-            "{FY1}": "",
-            "{FY2}": "",
-            "{FY3}": "",
-            "{FY4}": "",
-            "{FY5}": "",
-        },
-        description="报告期间占位符到实际期间的映射，如 {'{FY-1}': '2024A', '{FQ0/FY0}': '2025Q1A'}",
+        default_factory=lambda: {period_key: "" for period_key in DOCUMENT_METADATA_PERIOD_PLACEHOLDER_KEYS},
+        description="报告期间占位符到实际期间的映射，如 {'{FY-1}': '2024A', '{FQ0/FY0}': '2025Q1A/2025A'}",
     )
+
+
+def _default_period_placeholder_map() -> dict[str, str]:
+    """
+    目的：集中维护 document metadata 使用的完整期间占位符默认键集。
+    功能：返回 `periods` 的标准默认字典，确保所有已知期间键都存在。
+    实现逻辑：直接返回一个新的字典副本，避免调用方修改共享对象。
+    可调参数：当前无显式参数。
+    默认参数及原因：所有键默认值为空字符串，原因是未识别到具体期间时也要保留稳定键位。
+    """
+
+    return {period_key: "" for period_key in DOCUMENT_METADATA_PERIOD_PLACEHOLDER_KEYS}
+
+
+def _build_complete_period_placeholder_map(raw_periods: dict[str, str] | None = None) -> dict[str, str]:
+    """
+    目的：把稀疏期间结果规范化成完整的 placeholder 映射。
+    功能：先铺满默认键集，再用识别出的真实期间值覆盖对应占位符。
+    实现逻辑：只接受字符串键；值不是字符串时回退为空字符串；未知键直接忽略，避免污染结构。
+    可调参数：`raw_periods` 允许传入模型识别结果、raw JSON 兜底结果或已落盘字典。
+    默认参数及原因：默认 `None` 时返回全空键集，原因是 metadata 结构应始终稳定。
+    """
+
+    normalized_periods = _default_period_placeholder_map()
+    if not raw_periods:
+        return normalized_periods
+
+    for raw_key, raw_value in raw_periods.items():
+        if raw_key not in normalized_periods or not isinstance(raw_key, str):
+            continue
+        normalized_periods[raw_key] = raw_value if isinstance(raw_value, str) else ""
+    return normalized_periods
 
 
 def _normalize_metadata_value(value: str, fallback: str) -> str:
@@ -161,7 +175,7 @@ def _extract_metadata_from_raw(raw: str) -> tuple[str, str, dict[str, str]]:
     if not isinstance(data, dict):
         return "", "", {}
 
-    periods = {}
+    periods = _default_period_placeholder_map()
     raw_to_placeholder = {
         "fq0_or_fy0": "{FQ0/FY0}",
         "fq_minus_1": "{FQ-1}",
@@ -176,8 +190,7 @@ def _extract_metadata_from_raw(raw: str) -> tuple[str, str, dict[str, str]]:
     }
     for raw_key, placeholder in raw_to_placeholder.items():
         val = str(data.get(raw_key, "") or "").strip()
-        if val:
-            periods[placeholder] = val
+        periods[placeholder] = val
     return str(data.get("company_name", "") or ""), str(data.get("industry", "") or ""), periods
 
 
@@ -211,19 +224,19 @@ def create_document_metadata_agent() -> Agent:
     设计目的：把 metadata agent 的构造逻辑集中管理。
     模块功能：按模块常量创建一个稳定的识别 agent。
     实现逻辑：按当前定义的输入、处理和返回顺序执行，直接复用本函数或类里已经写好的步骤。
-    可调参数：由模块常量控制 temperature、verbose、reasoning 等设置。
-    默认参数及原因：默认低温度且不启用 reasoning，原因是这里只需要稳定抽取。
+    可调参数：由模块内提示文本常量控制 role、goal 和 backstory；运行参数在函数内保持固定。
+    默认参数及原因：默认低温度、允许 cache、关闭 delegation 和 reasoning，原因是这里只需要稳定抽取。
     """
 
     return Agent(
         role=DOCUMENT_METADATA_AGENT_ROLE,
         goal=DOCUMENT_METADATA_AGENT_GOAL,
         backstory=DOCUMENT_METADATA_AGENT_BACKSTORY,
-        llm=get_heavy_llm(temperature=DOCUMENT_METADATA_AGENT_TEMPERATURE),
-        verbose=DOCUMENT_METADATA_AGENT_VERBOSE,
-        allow_delegation=DOCUMENT_METADATA_AGENT_ALLOW_DELEGATION,
-        reasoning=DOCUMENT_METADATA_AGENT_REASONING,
-        cache=DOCUMENT_METADATA_AGENT_CACHE,
+        llm=get_heavy_llm(temperature=0.1),
+        verbose=True,
+        allow_delegation=False,
+        reasoning=False,
+        cache=True,
     )
 
 
@@ -254,7 +267,7 @@ def summarize_document_metadata(
 
     prompt = build_document_metadata_task_prompt(sampled_pages)
 
-    periods: dict[str, str] = {}
+    periods = _default_period_placeholder_map()
     try:
         result = agent.kickoff(prompt, response_format=PdfDocumentMetadata)
         company_name = ""
@@ -277,11 +290,10 @@ def summarize_document_metadata(
             }
             for attr_name, placeholder in pyd_to_placeholder.items():
                 val = str(getattr(pyd, attr_name, "") or "").strip()
-                if val:
-                    periods[placeholder] = val
+                periods[placeholder] = val
         if not company_name or not industry:
             company_name, industry, fallback_periods = _extract_metadata_from_raw(getattr(result, "raw", "") or "")
-            if not periods:
+            if periods == _default_period_placeholder_map():
                 periods = fallback_periods
     except Exception as exc:
         _logger.warning(
@@ -300,7 +312,7 @@ def summarize_document_metadata(
         company_name=_normalize_metadata_value(company_name, pdf_path.stem or DOCUMENT_METADATA_UNKNOWN_COMPANY),
         industry=_normalize_metadata_value(industry, DOCUMENT_METADATA_UNKNOWN_INDUSTRY),
         source_pages=[page_number for page_number, _ in sampled_pages],
-        periods=periods,
+        periods=_build_complete_period_placeholder_map(periods),
     )
 
 

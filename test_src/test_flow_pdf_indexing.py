@@ -6,8 +6,10 @@ from pathlib import Path
 
 import pytest
 import automated_research_report_generator.tools.pdf_page_tools as pdf_page_tools
+import automated_research_report_generator.tools.document_metadata_tools as document_metadata_tools_module
 from automated_research_report_generator.flow import pdf_indexing
 from automated_research_report_generator.flow import document_metadata as document_metadata_module
+from automated_research_report_generator.flow.research_flow import ResearchReportFlow
 from automated_research_report_generator.tools.pdf_page_tools import (
     PdfPageIndexEntry,
     ReadPdfPageIndexTool,
@@ -130,23 +132,18 @@ def test_default_page_index_path_requires_active_run_indexing_directory(tmp_path
     assert not fallback_dir.exists()
 
 
-def test_resolve_pdf_document_metadata_payload_does_not_touch_default_cache_path(tmp_path, monkeypatch) -> None:
+def test_resolve_pdf_document_metadata_payload_uses_in_memory_identification_path(tmp_path, monkeypatch) -> None:
     """
-    设计目的：锁住 metadata 预读逻辑不会再尝试访问项目级默认缓存路径。
-    模块功能：验证 `resolve_pdf_document_metadata_payload()` 直接走内存识别链路，而不是先计算默认 metadata 路径。
-    实现逻辑：把默认 metadata 路径函数替换成会失败的替身，再替换抽样和摘要逻辑并断言函数仍能成功返回 payload。
+    设计目的：锁住 metadata 预读逻辑会直接走当前内存识别链路。
+    模块功能：验证 `resolve_pdf_document_metadata_payload()` 在替换抽样和摘要逻辑后，仍能成功返回 payload。
+    实现逻辑：只替换抽样、agent 创建和摘要逻辑，不再依赖任何遗留默认路径占位符。
     可调参数：`tmp_path` 与 `monkeypatch` 由 pytest 提供。
-    默认参数及原因：默认用最小假 payload，原因是这里只验证“不碰默认缓存路径”这一条边界。
+    默认参数及原因：默认用最小假 payload，原因是这里只验证当前内存识别链路不需要遗留兼容层。
     """
 
     pdf_path = tmp_path / "sample.pdf"
     pdf_path.write_text("stub pdf", encoding="utf-8")
 
-    monkeypatch.setattr(
-        document_metadata_module,
-        "default_document_metadata_path",
-        lambda pdf_file_path: (_ for _ in ()).throw(AssertionError("should not touch default metadata path")),
-    )
     monkeypatch.setattr(document_metadata_module, "sample_document_metadata_pages", lambda *args, **kwargs: [(1, "封面")])
     monkeypatch.setattr(document_metadata_module, "create_document_metadata_agent", lambda: object())
     monkeypatch.setattr(
@@ -237,6 +234,9 @@ def test_extract_metadata_from_raw_parses_new_fy_fq_keys() -> None:
         "{FY-3}": "2022A",
         "{FY1}": "2026E",
         "{FY2}": "2027E",
+        "{FY3}": "",
+        "{FY4}": "",
+        "{FY5}": "",
     }
 
 
@@ -323,6 +323,134 @@ def test_summarize_document_metadata_maps_new_fy_fq_fields(tmp_path, monkeypatch
         "{FY1}": "2026E",
         "{FY2}": "2027E",
         "{FY3}": "2028E",
+        "{FY4}": "",
+        "{FY5}": "",
+    }
+
+
+def test_base_inputs_include_period_placeholder_values_from_document_metadata(tmp_path) -> None:
+    """
+    目的：锁住 Flow 给各个 crew 注入的公共输入里包含期间占位符的实际值。
+    功能：验证 `_base_inputs()` 会把 metadata 的 `periods` 映射成 CrewAI 可插值的 `FY-3`、`FQ0/FY0` 等键。
+    实现逻辑：先写入一个最小 metadata 文件，再构造 Flow 状态并直接读取 `_base_inputs()`。
+    可调参数：`tmp_path` 由 pytest 提供，用于隔离临时 metadata 文件。
+    默认参数及原因：只校验几个关键期间键，原因是这里关注的是占位符注入链路而不是 metadata 全字段序列化。
+    """
+
+    metadata_path = tmp_path / "sample_document_metadata.json"
+    metadata_path.write_text(
+        json.dumps(
+            {
+                "company_name": "测试公司",
+                "industry": "测试行业",
+                "periods": {
+                    "{FQ0/FY0}": "2025Q1A",
+                    "{FQ-1}": "",
+                    "{FY-1}": "2024A",
+                    "{FY-2}": "2023A",
+                    "{FY-3}": "2022A",
+                    "{FY1}": "",
+                    "{FY2}": "",
+                    "{FY3}": "",
+                    "{FY4}": "",
+                    "{FY5}": "",
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    flow = ResearchReportFlow()
+    flow.state.company_name = "测试公司"
+    flow.state.industry = "测试行业"
+    flow.state.pdf_file_path = "sample.pdf"
+    flow.state.page_index_file_path = "sample_page_index.json"
+    flow.state.document_metadata_file_path = metadata_path.as_posix()
+    flow.state.analysis_source_dir = "analysis_dir"
+
+    base_inputs = flow._base_inputs()
+
+    assert base_inputs["company_name"] == "测试公司"
+    assert base_inputs["FY-3"] == "2022A"
+    assert base_inputs["FY-2"] == "2023A"
+    assert base_inputs["FY-1"] == "2024A"
+    assert "FQ-1" in base_inputs
+    assert base_inputs["FQ-1"] == ""
+    assert base_inputs["FQ0/FY0"] == "2025Q1A"
+    assert base_inputs["FY1"] == ""
+    assert base_inputs["FY5"] == ""
+
+
+def test_sparse_metadata_periods_are_marked_stale_and_rebuilt(tmp_path, monkeypatch) -> None:
+    """
+    目的：锁住 Flow 在 metadata 缺失时仍会提供完整期间占位键集。
+    功能：验证 `_period_placeholder_inputs()` 至少返回当前仓库所有 `tasks.yaml` 用到的 10 个稳定键位。
+    实现逻辑：直接构造一个未设置 metadata 路径的 Flow，再读取占位输入字典并与默认键集比对。
+    可调参数：当前无显式参数，直接使用 Flow 默认状态。
+    默认参数及原因：默认值统一为空字符串，原因是未识别到期间时也必须满足 CrewAI 的模板插值要求。
+    """
+
+    pdf_path = tmp_path / "sample.pdf"
+    pdf_path.write_text("stub pdf", encoding="utf-8")
+    metadata_path = pdf_path.with_name(f"{pdf_path.stem}_document_metadata.json")
+    metadata_path.write_text(
+        json.dumps(
+            {
+                "pdf_file_path": pdf_path.as_posix(),
+                "generated_at": "2026-04-16T00:00:00+08:00",
+                "fingerprint": "fake-fingerprint",
+                "company_name": "测试公司",
+                "industry": "测试行业",
+                "source_pages": [1],
+                "periods": {
+                    "{FY-1}": "2024A",
+                    "{FY-2}": "2023A",
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(document_metadata_module, "compute_pdf_fingerprint", lambda _path: "fake-fingerprint")
+    monkeypatch.setattr(document_metadata_tools_module, "compute_pdf_fingerprint", lambda _path: "fake-fingerprint")
+    monkeypatch.setattr(document_metadata_module, "sample_document_metadata_pages", lambda *args, **kwargs: [(1, "封面")])
+    monkeypatch.setattr(document_metadata_module, "create_document_metadata_agent", lambda: object())
+    monkeypatch.setattr(
+        document_metadata_module,
+        "summarize_document_metadata",
+        lambda agent, pdf_file_path, sampled_pages: document_metadata_module.PdfDocumentMetadataPayload(
+            pdf_file_path=str(Path(pdf_file_path).resolve()),
+            generated_at="2026-04-16T10:00:00+08:00",
+            fingerprint="fake-fingerprint",
+            company_name="测试公司",
+            industry="测试行业",
+            source_pages=[1],
+        ),
+    )
+
+    assert not document_metadata_tools_module.document_metadata_is_current(pdf_path, metadata_path)
+
+    result = document_metadata_module.ensure_pdf_document_metadata(pdf_path.as_posix())
+    rebuilt_metadata = document_metadata_tools_module.load_document_metadata(metadata_path)
+
+    assert result["document_metadata_file_path"] == str(metadata_path.resolve())
+    assert rebuilt_metadata["company_name"] == "测试公司"
+    assert rebuilt_metadata["industry"] == "测试行业"
+    assert rebuilt_metadata["periods"] == {
+        "{FQ0/FY0}": "",
+        "{FQ-1}": "",
+        "{FY-1}": "",
+        "{FY-2}": "",
+        "{FY-3}": "",
+        "{FY1}": "",
+        "{FY2}": "",
+        "{FY3}": "",
+        "{FY4}": "",
+        "{FY5}": "",
     }
 
 

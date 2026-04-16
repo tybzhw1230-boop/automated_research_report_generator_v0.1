@@ -49,6 +49,7 @@ from automated_research_report_generator.flow.pdf_indexing import (
     reset_pdf_preprocessing_runtime_state,
 )
 from automated_research_report_generator.tools.document_metadata_tools import (
+    load_document_metadata,
     save_document_metadata,
 )
 from automated_research_report_generator.tools.pdf_page_tools import (
@@ -65,9 +66,6 @@ from automated_research_report_generator.tools.pdf_page_tools import (
 ANALYSIS_STAGE_COMPLETED_EVENT = "analysis_stage_completed"
 VALUATION_STAGE_COMPLETED_EVENT = "valuation_stage_completed"
 THESIS_STAGE_COMPLETED_EVENT = "thesis_stage_completed"
-RESEARCH_STAGE_COMPLETED_EVENT = ANALYSIS_STAGE_COMPLETED_EVENT
-VALUATION_STAGE_COMPLETED_NO_GATE_EVENT = VALUATION_STAGE_COMPLETED_EVENT
-THESIS_STAGE_COMPLETED_NO_GATE_EVENT = THESIS_STAGE_COMPLETED_EVENT
 
 STAGE_FAILURE_CHECKPOINT_CODES = {
     "analysis": "cp03_analysis_failed",
@@ -1082,7 +1080,7 @@ class ResearchReportFlow(Flow[ResearchFlowState]):
         默认参数及原因：默认只暴露稳定公共字段，原因是不同 crew 的业务输入由各阶段单独补充。
         """
 
-        return {
+        base_inputs = {
             "company_name": self.state.company_name,
             "industry": self.state.industry,
             "pdf_file_path": self.state.pdf_file_path,
@@ -1090,6 +1088,39 @@ class ResearchReportFlow(Flow[ResearchFlowState]):
             "document_metadata_file_path": self.state.document_metadata_file_path,
             "analysis_source_dir": self.state.analysis_source_dir,
         }
+        base_inputs.update(self._period_placeholder_inputs())
+        return base_inputs
+
+    def _period_placeholder_inputs(self) -> dict[str, str]:
+        """
+        目的：把 document metadata 里的期间占位符映射成 CrewAI 可插值的输入键。
+        功能：读取 metadata 中的 `periods`，把 `{FY-3}` 这类占位转成 `FY-3` 键供 tasks.yaml 使用。
+        实现逻辑：优先读取当前 run 的 metadata 文件；只保留形如 `{...}` 的字符串键，并去掉外层花括号。
+        可调参数：当前无显式参数，数据来源固定为 `state.document_metadata_file_path`。
+        默认参数及原因：缺少 metadata 或 periods 非字典时返回空字典，原因是不要让辅助输入构造反向阻塞主流程。
+        """
+
+        metadata_path = (self.state.document_metadata_file_path or "").strip()
+        if not metadata_path:
+            return {}
+
+        try:
+            metadata = load_document_metadata(metadata_path)
+        except (OSError, ValueError, json.JSONDecodeError):
+            return {}
+
+        raw_periods = metadata.get("periods")
+        if not isinstance(raw_periods, dict):
+            return {}
+
+        period_inputs: dict[str, str] = {}
+        for raw_key, raw_value in raw_periods.items():
+            if not isinstance(raw_key, str):
+                continue
+            if not (raw_key.startswith("{") and raw_key.endswith("}")):
+                continue
+            period_inputs[raw_key[1:-1]] = raw_value if isinstance(raw_value, str) else ""
+        return period_inputs
 
     def _clear_run_outcome(self) -> None:
         """
