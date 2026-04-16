@@ -13,6 +13,7 @@ from typing import Any
 from automated_research_report_generator.flow.common import (
     CACHE_ROOT,
     DEFAULT_PDF_PATH,
+    enable_test_fixture_runtime,
     ensure_directory,
     normalize_path,
     utc_timestamp,
@@ -575,6 +576,7 @@ def main() -> None:
     """
 
     args = _parse_args()
+    enable_test_fixture_runtime()
     pdf_path = Path(args.pdf).expanduser().resolve()
     if args.worker_case:
         run_worker_case(

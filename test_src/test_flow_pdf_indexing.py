@@ -9,6 +9,11 @@ import automated_research_report_generator.tools.pdf_page_tools as pdf_page_tool
 import automated_research_report_generator.tools.document_metadata_tools as document_metadata_tools_module
 from automated_research_report_generator.flow import pdf_indexing
 from automated_research_report_generator.flow import document_metadata as document_metadata_module
+from automated_research_report_generator.flow.common import (
+    ALLOW_TEST_FIXTURE_ENV,
+    TEST_FIXTURE_ROOT,
+    ensure_runtime_artifact_path_allowed,
+)
 from automated_research_report_generator.flow.research_flow import ResearchReportFlow
 from automated_research_report_generator.tools.pdf_page_tools import (
     PdfPageIndexEntry,
@@ -452,6 +457,79 @@ def test_sparse_metadata_periods_are_marked_stale_and_rebuilt(tmp_path, monkeypa
         "{FY4}": "",
         "{FY5}": "",
     }
+
+
+def test_runtime_artifact_path_guard_blocks_fixture_path_in_production(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    目的：锁住正式运行态对 `test_src/live_fixtures` 的硬隔离边界。
+    功能：验证未显式开启测试态时，fixture 路径会被立即判定为非法来源。
+    实现逻辑：清掉统一环境变量后，直接调用路径守卫并断言抛出异常。
+    可调参数：`monkeypatch` 用于隔离环境变量。
+    默认参数及原因：默认使用仓库真实 fixture 根目录，原因是这正是当前高风险污染源。
+    """
+
+    monkeypatch.delenv(ALLOW_TEST_FIXTURE_ENV, raising=False)
+
+    with pytest.raises(RuntimeError, match="Illegal finance artifact path|Illegal artifact path"):
+        ensure_runtime_artifact_path_allowed(
+            TEST_FIXTURE_ROOT / "analysis_sources" / "05_finance_file_source.md",
+            label="finance artifact path",
+        )
+
+
+def test_runtime_artifact_path_guard_allows_fixture_path_in_test_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    目的：锁住测试态仍可显式使用 live fixture，不影响现有 harness。
+    功能：验证统一环境变量打开后，fixture 路径会被正常放行。
+    实现逻辑：设置测试态环境变量后，直接检查返回的标准化路径。
+    可调参数：`monkeypatch` 用于隔离环境变量。
+    默认参数及原因：默认只检查单一路径，原因是守卫逻辑本身与具体文件内容无关。
+    """
+
+    fixture_path = TEST_FIXTURE_ROOT / "analysis_sources" / "05_finance_file_source.md"
+    monkeypatch.setenv(ALLOW_TEST_FIXTURE_ENV, "1")
+
+    assert ensure_runtime_artifact_path_allowed(
+        fixture_path,
+        label="finance artifact path",
+    ) == fixture_path.resolve().as_posix()
+
+
+def test_flow_read_blocks_fixture_path_in_production(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    目的：锁住 Flow 回读中间产物时不会悄悄吃到 fixture 文件。
+    功能：验证 `_read()` 遇到 fixture 路径会直接失败，而不是读出内容继续运行。
+    实现逻辑：构造最小 Flow 后直接调用 `_read()` 并断言抛出异常。
+    可调参数：`monkeypatch` 用于清理测试态环境变量。
+    默认参数及原因：默认读取 finance fixture，原因是本轮发现的问题就集中在该专题。
+    """
+
+    monkeypatch.delenv(ALLOW_TEST_FIXTURE_ENV, raising=False)
+    flow = ResearchReportFlow()
+
+    with pytest.raises(RuntimeError, match="Illegal analysis artifact path"):
+        flow._read((TEST_FIXTURE_ROOT / "analysis_sources" / "05_finance_file_source.md").as_posix())
+
+
+def test_prepare_evidence_blocks_fixture_pdf_path_in_production(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    目的：锁住正式 Flow 在预处理前就拦截非法 fixture PDF 路径。
+    功能：验证 `prepare_evidence()` 不会先去读非法路径，再在后续阶段才报错。
+    实现逻辑：给 Flow 注入一个位于 fixture 根目录下的假 PDF 路径，断言立即抛出路径越界异常。
+    可调参数：`monkeypatch` 用于清理测试态环境变量。
+    默认参数及原因：默认不要求文件真实存在，原因是路径来源本身就应先被拦截。
+    """
+
+    monkeypatch.delenv(ALLOW_TEST_FIXTURE_ENV, raising=False)
+    flow = ResearchReportFlow()
+    flow.state.pdf_file_path = (TEST_FIXTURE_ROOT / "fake_fixture_document.pdf").as_posix()
+
+    with pytest.raises(RuntimeError, match="Illegal pdf file path"):
+        flow.prepare_evidence()
 
 
 def test_read_pdf_page_index_tool_uses_explicit_pdf_path(tmp_path) -> None:

@@ -22,6 +22,7 @@ from automated_research_report_generator.crews.writeup_crew.writeup_crew import 
 from automated_research_report_generator.flow import common as flow_common
 from automated_research_report_generator.flow.common import (
     activate_run_preprocess_log,
+    enable_test_fixture_runtime,
     ensure_directory,
     normalize_path,
     utc_timestamp,
@@ -1156,6 +1157,7 @@ def run_worker_case(
     默认参数及原因：默认所有 live case 都走这一入口，原因是父进程监控和结果读取都依赖统一协议。
     """
 
+    enable_test_fixture_runtime()
     spec = get_case_spec(case_id)
     runtime = LiveCaseRuntime(suite_id=suite_id, spec=spec, case_dir=case_dir, pdf_path=pdf_path)
     _patch_case_cache_root(runtime)

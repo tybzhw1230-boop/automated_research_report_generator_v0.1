@@ -14,8 +14,11 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 CACHE_ROOT = PROJECT_ROOT / ".cache"
-DEFAULT_PDF_PATH = PROJECT_ROOT / "pdf" / "sehk26033003882_c.pdf"
+DEFAULT_PDF_PATH = PROJECT_ROOT / "pdf" / "2025-10-30-H02364.HK-鲟龙科技-20251030杭州千島湖鱘龍科技股份有限公司申請版本（第一次呈交）全文檔案.pdf"
 CREWAI_MEMORY_DIR = PROJECT_ROOT / "crewai_memory"
+TEST_FIXTURE_ROOT = PROJECT_ROOT / "test_src" / "live_fixtures"
+TESTING_MODULE_ROOT = PROJECT_ROOT / "src" / "automated_research_report_generator" / "testing"
+ALLOW_TEST_FIXTURE_ENV = "AUTOMATED_RESEARCH_REPORT_GENERATOR_ALLOW_TEST_FIXTURES"
 RUN_ARTIFACT_DIR_NAME = "md"
 RUN_LOG_DIR_NAME = "logs"
 RUN_PREPROCESS_LOG_FILE_NAME = "preprocess.txt"
@@ -85,6 +88,63 @@ os.environ.setdefault("OTEL_SDK_DISABLED", "true")
 os.environ.setdefault("CREWAI_DISABLE_TELEMETRY", "true")
 os.environ.setdefault("CREWAI_DISABLE_TRACKING", "true")
 os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "true")
+
+
+def runtime_allows_test_fixtures() -> bool:
+    """
+    目的：集中判断当前进程是否显式处于允许读取测试夹具的测试态。
+    功能：读取统一环境变量，返回当前运行是否允许访问 `test_src/live_fixtures`。
+    实现逻辑：仅当显式环境变量为 `1` 时返回 `True`，避免生产态因为默认值而误放行。
+    可调参数：当前无显式参数，控制项固定为 `ALLOW_TEST_FIXTURE_ENV`。
+    默认参数及原因：默认返回 `False`，原因是正式 Flow 必须把测试夹具视为非法来源。
+    """
+
+    return os.getenv(ALLOW_TEST_FIXTURE_ENV, "").strip() == "1"
+
+
+def enable_test_fixture_runtime() -> None:
+    """
+    目的：为 live harness 这类测试态入口显式打开 fixture 访问权限。
+    功能：把统一环境变量设置为 `1`，让运行时路径守卫放行测试夹具目录。
+    实现逻辑：只在调用方明确进入测试链路时写入环境变量，不在模块导入阶段自动开启。
+    可调参数：当前无。
+    默认参数及原因：默认不开启，原因是生产态必须把 fixture 视为越界输入。
+    """
+
+    os.environ[ALLOW_TEST_FIXTURE_ENV] = "1"
+
+
+def ensure_runtime_artifact_path_allowed(path: Path | str, *, label: str = "artifact path") -> str:
+    """
+    目的：在正式运行链路里阻断测试夹具和 testing 模块路径混入业务输入。
+    功能：把路径标准化后检查是否落在 `test_src/live_fixtures` 或 `src/.../testing` 下。
+    实现逻辑：测试态直接放行；生产态下若解析后的绝对路径命中禁入根目录，则立即抛出异常。
+    可调参数：`path` 为待检查路径，`label` 用于错误信息里标记当前路径用途。
+    默认参数及原因：`label` 默认使用通用文案，原因是多数调用点只需要给出最小排查信息。
+    """
+
+    if not path:
+        return ""
+
+    resolved = Path(path).expanduser().resolve()
+    normalized = normalize_path(resolved)
+    if runtime_allows_test_fixtures():
+        return normalized
+
+    blocked_roots = (
+        ("test fixture", TEST_FIXTURE_ROOT.resolve()),
+        ("testing module", TESTING_MODULE_ROOT.resolve()),
+    )
+    for blocked_label, blocked_root in blocked_roots:
+        try:
+            resolved.relative_to(blocked_root)
+        except ValueError:
+            continue
+        raise RuntimeError(
+            f"Illegal {label} in production runtime: {normalized} "
+            f"(blocked root: {blocked_label} -> {normalize_path(blocked_root)})"
+        )
+    return normalized
 
 
 def utc_timestamp() -> str:

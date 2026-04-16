@@ -33,6 +33,7 @@ from automated_research_report_generator.flow.common import (
     activate_run_preprocess_log,
     append_text_log_line,
     build_run_directories,
+    ensure_runtime_artifact_path_allowed,
     ensure_directory,
     normalize_path,
     read_text_if_exists,
@@ -180,12 +181,18 @@ class ResearchReportFlow(Flow[ResearchFlowState]):
         """
         目的：为整次 Flow 建立最小且真实的运行上下文。
         功能：解析 PDF、生成元数据与页索引，并创建当前 run 的目录边界。
-        实现逻辑：先校验 PDF 路径，再依次完成预处理、上下文注入和状态字段回写。
+        实现逻辑：先校验 PDF 路径来源与存在性，再依次完成预处理、上下文注入和状态字段回写。
         可调参数：PDF 路径来自 `state.pdf_file_path` 或 `DEFAULT_PDF_PATH`。
         默认参数及原因：默认使用 `DEFAULT_PDF_PATH`，原因是本地直接运行时需要一个稳定入口。
         """
 
         pdf_path = Path(self.state.pdf_file_path or DEFAULT_PDF_PATH).expanduser().resolve()
+        pdf_path = Path(
+            ensure_runtime_artifact_path_allowed(
+                pdf_path,
+                label="pdf file path",
+            )
+        )
         if not pdf_path.exists():
             raise FileNotFoundError(f"PDF file does not exist: {pdf_path}")
 
@@ -994,7 +1001,16 @@ class ResearchReportFlow(Flow[ResearchFlowState]):
         """
 
         if self.state.pdf_file_path and self.state.page_index_file_path:
-            set_pdf_context(self.state.pdf_file_path, self.state.page_index_file_path)
+            set_pdf_context(
+                ensure_runtime_artifact_path_allowed(
+                    self.state.pdf_file_path,
+                    label="pdf file path",
+                ),
+                ensure_runtime_artifact_path_allowed(
+                    self.state.page_index_file_path,
+                    label="page index file path",
+                ),
+            )
 
     def _configure_crew_log(self, crew_instance: Any, log_path: str) -> Any:
         """
@@ -1069,7 +1085,12 @@ class ResearchReportFlow(Flow[ResearchFlowState]):
         默认参数及原因：默认缺文件时返回空串，原因是失败态下仍要能写 manifest 和 checkpoint。
         """
 
-        return read_text_if_exists(path)
+        return read_text_if_exists(
+            ensure_runtime_artifact_path_allowed(
+                path,
+                label="analysis artifact path",
+            )
+        )
 
     def _base_inputs(self) -> dict[str, str]:
         """
@@ -1083,10 +1104,22 @@ class ResearchReportFlow(Flow[ResearchFlowState]):
         base_inputs = {
             "company_name": self.state.company_name,
             "industry": self.state.industry,
-            "pdf_file_path": self.state.pdf_file_path,
-            "page_index_file_path": self.state.page_index_file_path,
-            "document_metadata_file_path": self.state.document_metadata_file_path,
-            "analysis_source_dir": self.state.analysis_source_dir,
+            "pdf_file_path": ensure_runtime_artifact_path_allowed(
+                self.state.pdf_file_path,
+                label="pdf file path",
+            ),
+            "page_index_file_path": ensure_runtime_artifact_path_allowed(
+                self.state.page_index_file_path,
+                label="page index file path",
+            ),
+            "document_metadata_file_path": ensure_runtime_artifact_path_allowed(
+                self.state.document_metadata_file_path,
+                label="document metadata file path",
+            ),
+            "analysis_source_dir": ensure_runtime_artifact_path_allowed(
+                self.state.analysis_source_dir,
+                label="analysis source directory",
+            ),
         }
         base_inputs.update(self._period_placeholder_inputs())
         return base_inputs
@@ -1100,7 +1133,10 @@ class ResearchReportFlow(Flow[ResearchFlowState]):
         默认参数及原因：缺少 metadata 或 periods 非字典时返回空字典，原因是不要让辅助输入构造反向阻塞主流程。
         """
 
-        metadata_path = (self.state.document_metadata_file_path or "").strip()
+        metadata_path = ensure_runtime_artifact_path_allowed(
+            (self.state.document_metadata_file_path or "").strip(),
+            label="document metadata file path",
+        )
         if not metadata_path:
             return {}
 
