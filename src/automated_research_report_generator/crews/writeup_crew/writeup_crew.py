@@ -9,6 +9,9 @@ from crewai.project import CrewBase, agent, crew, task
 
 from automated_research_report_generator.flow.common import PROJECT_ROOT
 from automated_research_report_generator.llm_config import get_heavy_llm
+from automated_research_report_generator.tools.investment_snapshot_ppt_tool import (
+    InvestmentSnapshotPptTool,
+)
 from automated_research_report_generator.tools.markdown_to_pdf_tool import MarkdownToPdfTool
 
 # 设计目的：把最终 Markdown 的非破坏性确认和 PDF 导出拆开，避免 writeup 阶段再次改写正文。
@@ -64,6 +67,68 @@ class WriteupCrew:
             inject_date=True,
         )
 
+    @agent
+    def pitch_material_writer(self) -> Agent:
+        """
+        设计目的：集中定义推介材料撰写角色。
+        模块功能：把已完成的分析结论压缩成适合销售、路演和投资沟通的高信息密度 Markdown 文案。
+        实现逻辑：只消费上游 pack 与 thesis 文本，不重新读取 PDF 或外部搜索。
+        可调参数：agent 配置、temperature 和迭代次数。
+        默认参数及原因：默认 `temperature=0.6`，原因是推介材料需要更强表达力，但仍必须受上游事实约束。
+        """
+
+        return Agent(
+            config=self.agents_config["pitch_material_writer"],  # type: ignore[index]
+            tools=[],
+            llm=get_heavy_llm(temperature=0.6),
+            function_calling_llm=None,
+            max_iter=25,
+            max_rpm=None,
+            max_execution_time=None,
+            verbose=True,
+            allow_delegation=False,
+            step_callback=None,
+            cache=True,
+            allow_code_execution=False,
+            max_retry_limit=2,
+            respect_context_window=True,
+            use_system_prompt=True,
+            reasoning=False,
+            max_reasoning_attempts=None,
+            inject_date=True,
+        )
+
+    @agent
+    def investment_snapshot_slide_writer(self) -> Agent:
+        """
+        设计目的：集中定义投委会单页快照角色。
+        模块功能：把上游分析压缩成结构化输入，并调用 PPT 工具导出单页快照。
+        实现逻辑：agent 只负责内容压缩和一次性工具调用，真正的 PPT 绘制由工具完成。
+        可调参数：agent 配置、temperature、timeout 和迭代次数。
+        默认参数及原因：默认 `temperature=0.2` 且 `timeout=60`，原因是该任务强调结构稳定和工具调用准确性。
+        """
+
+        return Agent(
+            config=self.agents_config["investment_snapshot_slide_writer"],  # type: ignore[index]
+            tools=[InvestmentSnapshotPptTool(result_as_answer=True)],
+            llm=get_heavy_llm(temperature=0.2, timeout=60),
+            function_calling_llm=None,
+            max_iter=20,
+            max_rpm=None,
+            max_execution_time=None,
+            verbose=True,
+            allow_delegation=False,
+            step_callback=None,
+            cache=True,
+            allow_code_execution=False,
+            max_retry_limit=2,
+            respect_context_window=True,
+            use_system_prompt=True,
+            reasoning=False,
+            max_reasoning_attempts=None,
+            inject_date=True,
+        )
+
     @task
     def compile_report(self) -> Task:
         """
@@ -85,10 +150,54 @@ class WriteupCrew:
         )
 
     @task
+    def create_pitch_material(self) -> Task:
+        """
+        设计目的：定义推介材料生成任务。
+        模块功能：基于上游 pack 与 thesis 文本生成可直接分发的 Markdown 推介材料。
+        实现逻辑：以 `compile_report()` 作为就绪门，再由专用写作 agent 完成内容重组和落盘。
+        可调参数：任务配置、上下文依赖和输出文件路径。
+        默认参数及原因：默认开启 Markdown 输出，原因是核心产物就是结构化推介材料正文。
+        """
+
+        return Task(
+            config=self.tasks_config["create_pitch_material"],  # type: ignore[index]
+            context=[self.compile_report()],
+            tools=[],
+            async_execution=False,
+            output_json=None,
+            output_pydantic=None,
+            human_input=False,
+            cache=True,
+            markdown=True,
+        )
+
+    @task
+    def create_investment_snapshot_ppt(self) -> Task:
+        """
+        设计目的：定义投委会单页快照 PPT 生成任务。
+        模块功能：基于上游 pack 与 thesis 文本压缩出结构化内容，并调用专用工具导出 PPTX。
+        实现逻辑：以 `compile_report()` 作为就绪门，工具调用由 agent 负责完成。
+        可调参数：任务配置和上下文依赖。
+        默认参数及原因：默认关闭 Markdown 输出，原因是该任务的核心产物是 PPT 文件而不是长文本。
+        """
+
+        return Task(
+            config=self.tasks_config["create_investment_snapshot_ppt"],  # type: ignore[index]
+            context=[self.compile_report()],
+            tools=[],
+            async_execution=False,
+            output_json=None,
+            output_pydantic=None,
+            human_input=False,
+            cache=True,
+            markdown=False,
+        )
+
+    @task
     def export_final_report(self) -> Task:
         """
         设计目的：定义最终 PDF 导出任务。
-        模块功能：在编写完成后调用 `MarkdownToPdfTool` 导出 PDF。
+        模块功能：在其它 writeup 产物生成完成后调用 `MarkdownToPdfTool` 导出 PDF。
         实现逻辑：按当前定义的输入、处理和返回顺序执行，直接复用本函数或类里已经写好的步骤。
         可调参数：任务配置、上下文依赖和工具列表。
         默认参数及原因：默认依赖 `compile_report()`，原因是先确认 flow 产物已就绪，再导出会更稳。

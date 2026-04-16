@@ -7,6 +7,7 @@ litellm==1.82.6
 markdown==3.10.2
 pydantic==2.11.10
 PyMuPDF==1.26.7
+python-pptx==1.0.2
 python-dotenv==1.1.1
 PyYAML==6.0.3
 tushare==1.4.29

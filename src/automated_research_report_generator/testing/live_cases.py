@@ -408,6 +408,12 @@ def _bootstrap_manual_flow(runtime: LiveCaseRuntime) -> ResearchReportFlow:
     flow.state.page_index_file_path = normalize_path(artifact_dir / "page_index_stub.json")
     flow.state.final_report_markdown_path = normalize_path(artifact_dir / f"{runtime.pdf_path.stem}_v2_report.md")
     flow.state.final_report_pdf_path = normalize_path(artifact_dir / f"{runtime.pdf_path.stem}_v2_report.pdf")
+    flow.state.pitch_material_markdown_path = normalize_path(
+        artifact_dir / f"{runtime.pdf_path.stem}_pitch_material.md"
+    )
+    flow.state.investment_snapshot_ppt_path = normalize_path(
+        artifact_dir / f"{runtime.pdf_path.stem}_investment_snapshot.pptx"
+    )
 
     Path(flow.state.document_metadata_file_path).write_text(
         json.dumps({"company_name": flow.state.company_name, "industry": flow.state.industry}, ensure_ascii=False, indent=2),
@@ -1006,7 +1012,7 @@ def run_thesis_component(runtime: LiveCaseRuntime) -> dict[str, Any]:
 def run_writeup_component(runtime: LiveCaseRuntime) -> dict[str, Any]:
     """
     目的：执行真实 writeup component case。
-    功能：基于 fixture 上游状态先由 Flow 确定性拼装最终 Markdown，再调用 WriteupCrew 导出 PDF。
+    功能：基于 fixture 上游状态先由 Flow 确定性拼装最终 Markdown，再调用 WriteupCrew 生成 pitch、snapshot 和 PDF。
     实现逻辑：复用生产 `_write_final_report_markdown()` 和 writeup crew 输入边界，但不依赖前序链路真实输出。
     可调参数：`runtime`。
     默认参数及原因：默认让 Flow 现场组装最终 Markdown，原因是 writeup 阶段本来就依赖该确定性拼装逻辑。
@@ -1017,9 +1023,11 @@ def run_writeup_component(runtime: LiveCaseRuntime) -> dict[str, Any]:
     flow._write_final_report_markdown()
     flow._prepare_tool_context()
     crew = flow._configure_crew_log(WriteupCrew(), flow._crew_log_path("writeup_crew"))
-    inputs = flow._base_inputs() | {
+    inputs = flow._base_inputs() | flow._writeup_stage_text_inputs() | {
         "final_report_markdown_path": flow.state.final_report_markdown_path,
         "final_report_pdf_path": flow.state.final_report_pdf_path,
+        "pitch_material_markdown_path": flow.state.pitch_material_markdown_path,
+        "investment_snapshot_ppt_path": flow.state.investment_snapshot_ppt_path,
     }
     _write_input_boundary(runtime.case_dir, allowed_keys=sorted(inputs.keys()), observed_keys=sorted(inputs.keys()))
     crew.crew().kickoff(inputs=inputs)
@@ -1028,12 +1036,19 @@ def run_writeup_component(runtime: LiveCaseRuntime) -> dict[str, Any]:
         {
             "final_report_markdown_path": flow.state.final_report_markdown_path,
             "final_report_pdf_path": flow.state.final_report_pdf_path,
+            "pitch_material_markdown_path": flow.state.pitch_material_markdown_path,
+            "investment_snapshot_ppt_path": flow.state.investment_snapshot_ppt_path,
         },
     )
     flow._write_manifest_from_state("writeup_completed")
     return {
         "flow": flow,
-        "expected_output_paths": [flow.state.final_report_markdown_path, flow.state.final_report_pdf_path],
+        "expected_output_paths": [
+            flow.state.final_report_markdown_path,
+            flow.state.pitch_material_markdown_path,
+            flow.state.investment_snapshot_ppt_path,
+            flow.state.final_report_pdf_path,
+        ],
         "checkpoint_paths": [checkpoint_path],
         "allowed_input_keys": sorted(inputs.keys()),
         "observed_input_keys": sorted(inputs.keys()),
@@ -1124,7 +1139,12 @@ def run_publish_chain_live(runtime: LiveCaseRuntime) -> dict[str, Any]:
     flow.publish_if_passed()
     return {
         "flow": flow,
-        "expected_output_paths": [flow.state.final_report_markdown_path, flow.state.final_report_pdf_path],
+        "expected_output_paths": [
+            flow.state.final_report_markdown_path,
+            flow.state.pitch_material_markdown_path,
+            flow.state.investment_snapshot_ppt_path,
+            flow.state.final_report_pdf_path,
+        ],
     }
 
 

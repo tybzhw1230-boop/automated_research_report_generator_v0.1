@@ -328,6 +328,8 @@ def write_run_debug_manifest(
     diligence_questions_path: str = "",
     final_report_markdown_path: str = "",
     final_report_pdf_path: str = "",
+    pitch_material_markdown_path: str = "",
+    investment_snapshot_ppt_path: str = "",
     failed_stage: str = "",
     failed_crew: str = "",
     error_message: str = "",
@@ -373,6 +375,12 @@ def write_run_debug_manifest(
             normalize_path(final_report_markdown_path) if final_report_markdown_path else ""
         ),
         "final_report_pdf_path": normalize_path(final_report_pdf_path) if final_report_pdf_path else "",
+        "pitch_material_markdown_path": (
+            normalize_path(pitch_material_markdown_path) if pitch_material_markdown_path else ""
+        ),
+        "investment_snapshot_ppt_path": (
+            normalize_path(investment_snapshot_ppt_path) if investment_snapshot_ppt_path else ""
+        ),
         "failed_stage": failed_stage,
         "failed_crew": failed_crew,
         "error_message": error_message,

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
+
+import pytest
 
 import automated_research_report_generator.flow.research_flow as research_flow_module
 
@@ -33,10 +36,50 @@ def _build_flow(tmp_path: Path) -> ResearchReportFlow:
     flow.state.document_metadata_file_path = (tmp_path / "document_metadata.json").as_posix()
     flow.state.final_report_markdown_path = (run_cache_dir / "report.md").as_posix()
     flow.state.final_report_pdf_path = (run_cache_dir / "report.pdf").as_posix()
+    flow.state.pitch_material_markdown_path = (run_cache_dir / "pitch.md").as_posix()
+    flow.state.investment_snapshot_ppt_path = (run_cache_dir / "snapshot.pptx").as_posix()
     Path(flow.state.pdf_file_path).write_text("pdf placeholder", encoding="utf-8")
     Path(flow.state.page_index_file_path).write_text("{}", encoding="utf-8")
     Path(flow.state.document_metadata_file_path).write_text("metadata", encoding="utf-8")
     return flow
+
+
+def _write_document_metadata_with_periods(
+    flow: ResearchReportFlow,
+    *,
+    current_period: str = "2025H1A",
+) -> None:
+    """
+    目的：为期间表头守卫测试补一份最小可读的 metadata 文件。
+    功能：写入 Flow 当前 run 需要的 `periods` 字典，让 `_current_period_label()` 能稳定读取当前期标签。
+    实现逻辑：直接覆盖 `state.document_metadata_file_path` 指向的 JSON 文件，只保留测试必需字段。
+    可调参数：`flow` 和 `current_period`。
+    默认参数及原因：默认当前期使用 `2025H1A`，原因是这正是本轮故障的核心样本。
+    """
+
+    Path(flow.state.document_metadata_file_path).write_text(
+        json.dumps(
+            {
+                "company_name": flow.state.company_name,
+                "industry": flow.state.industry,
+                "periods": {
+                    "{FQ0/FY0}": current_period,
+                    "{FQ-1}": "2024H1A",
+                    "{FY-1}": "2024A",
+                    "{FY-2}": "2023A",
+                    "{FY-3}": "2022A",
+                    "{FY1}": "2026E",
+                    "{FY2}": "2027E",
+                    "{FY3}": "",
+                    "{FY4}": "",
+                    "{FY5}": "",
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
 
 
 def _build_fake_analysis_crew_class(
@@ -406,6 +449,131 @@ def test_run_valuation_stage_uses_updated_finance_inputs(tmp_path, monkeypatch) 
     assert checkpoint_codes == ["cp04_valuation"]
 
 
+def test_run_thesis_stage_uses_selected_source_inputs_and_preserves_outputs(tmp_path, monkeypatch) -> None:
+    """
+    目的：锁定 thesis 阶段会注入选定的 source/supporting texts，而不是回退到只读 pack。
+    功能：检查 bull/neutral/bear/synthesizer 共同使用的输入边界、排除项，以及四份 thesis 产物路径回写。
+    实现逻辑：预写 pack、估值、尽调和 source 文件，再用假 thesis crew 承接 `_run_thesis_stage()`。
+    可调参数：`tmp_path` 和 `monkeypatch`。
+    默认参数及原因：不启动真实 LLM，原因是这里关注的是 Flow 接线稳定性。
+    """
+
+    flow = _build_flow(tmp_path)
+    kickoff_inputs: dict[str, str] = {}
+    checkpoint_codes: list[str] = []
+
+    selected_inputs = {
+        "history_background_pack_path": "# history pack\n",
+        "industry_pack_path": "# industry pack\n",
+        "business_pack_path": "# business pack\n",
+        "peer_info_pack_path": "# peer pack\n",
+        "finance_pack_path": "# finance pack\n",
+        "operating_metrics_pack_path": "# metrics pack\n",
+        "risk_pack_path": "# risk pack\n",
+        "peers_pack_path": "# peers valuation\n",
+        "intrinsic_value_pack_path": "# intrinsic valuation\n",
+        "valuation_pack_path": "# valuation pack\n",
+        "diligence_questions_path": "# diligence\n",
+        "history_background_file_source_path": "# history file source\n",
+        "industry_file_source_path": "# industry file source\n",
+        "industry_search_source_path": "# industry search source\n",
+        "business_file_source_path": "# business file source\n",
+        "peer_info_peer_data_source_path": "# peer data source\n",
+        "finance_file_source_path": "# finance file source\n",
+        "finance_computed_metrics_path": "# finance computed metrics\n",
+        "operating_metrics_file_source_path": "# metrics file source\n",
+        "risk_file_source_path": "# risk file source\n",
+        "risk_search_source_path": "# risk search source\n",
+    }
+    for attr, content in selected_inputs.items():
+        path = tmp_path / f"{attr}.md"
+        path.write_text(content, encoding="utf-8")
+        setattr(flow.state, attr, path.as_posix())
+
+    excluded_inputs = {
+        "history_background_search_source_path": "# should stay out\n",
+        "business_search_source_path": "# should stay out\n",
+        "peer_info_peer_list_source_path": "# should stay out\n",
+        "finance_analysis_path": "# should stay out\n",
+        "operating_metrics_search_source_path": "# should stay out\n",
+    }
+    for attr, content in excluded_inputs.items():
+        path = tmp_path / f"{attr}.md"
+        path.write_text(content, encoding="utf-8")
+        setattr(flow.state, attr, path.as_posix())
+
+    class FakeInvestmentThesisCrew:
+        """
+        目的：模拟 thesis 阶段的最小 crew 接口。
+        功能：接收 Flow 注入的 pack/source 文本，并写出四份 thesis 产物。
+        实现逻辑：在 kickoff 时记录输入，再按固定文件名落盘占位产物。
+        可调参数：无。
+        默认参数及原因：输出固定简短文本，原因是这里只验证输入边界与路径回写。
+        """
+
+        def __init__(self) -> None:
+            self.output_log_file_path = None
+
+        def crew(self):
+            class Runner:
+                def kickoff(self, inputs: dict[str, str]) -> None:
+                    kickoff_inputs.update(inputs)
+                    output_dir = Path(inputs["thesis_output_dir"])
+                    output_dir.mkdir(parents=True, exist_ok=True)
+                    (output_dir / "01_bull_thesis.md").write_text("# bull\n", encoding="utf-8")
+                    (output_dir / "02_neutral_thesis.md").write_text("# neutral\n", encoding="utf-8")
+                    (output_dir / "03_bear_thesis.md").write_text("# bear\n", encoding="utf-8")
+                    (output_dir / "04_investment_thesis.md").write_text("# thesis\n", encoding="utf-8")
+
+            return Runner()
+
+    monkeypatch.setattr(research_flow_module, "InvestmentThesisCrew", FakeInvestmentThesisCrew)
+    monkeypatch.setattr(flow, "_prepare_tool_context", lambda: None)
+    monkeypatch.setattr(flow, "_write_manifest_from_state", lambda status: status)
+    monkeypatch.setattr(
+        flow,
+        "_write_checkpoint",
+        lambda checkpoint_code, payload: checkpoint_codes.append(checkpoint_code) or "checkpoint.json",
+    )
+    monkeypatch.setattr(flow, "_log_flow", lambda message: "flow.log")
+
+    result = flow._run_thesis_stage()
+
+    assert result.endswith("04_investment_thesis.md")
+    assert kickoff_inputs["history_background_pack_text"] == "# history pack\n"
+    assert kickoff_inputs["industry_pack_text"] == "# industry pack\n"
+    assert kickoff_inputs["business_pack_text"] == "# business pack\n"
+    assert kickoff_inputs["peer_info_pack_text"] == "# peer pack\n"
+    assert kickoff_inputs["finance_pack_text"] == "# finance pack\n"
+    assert kickoff_inputs["operating_metrics_pack_text"] == "# metrics pack\n"
+    assert kickoff_inputs["risk_pack_text"] == "# risk pack\n"
+    assert kickoff_inputs["peers_pack_text"] == "# peers valuation\n"
+    assert kickoff_inputs["intrinsic_value_pack_text"] == "# intrinsic valuation\n"
+    assert kickoff_inputs["valuation_pack_text"] == "# valuation pack\n"
+    assert kickoff_inputs["diligence_questions_text"] == "# diligence\n"
+    assert kickoff_inputs["history_background_file_source_text"] == "# history file source\n"
+    assert kickoff_inputs["industry_file_source_text"] == "# industry file source\n"
+    assert kickoff_inputs["industry_search_source_text"] == "# industry search source\n"
+    assert kickoff_inputs["business_file_source_text"] == "# business file source\n"
+    assert kickoff_inputs["peer_info_peer_data_source_text"] == "# peer data source\n"
+    assert kickoff_inputs["finance_file_source_text"] == "# finance file source\n"
+    assert kickoff_inputs["finance_computed_metrics_text"] == "# finance computed metrics\n"
+    assert kickoff_inputs["operating_metrics_file_source_text"] == "# metrics file source\n"
+    assert kickoff_inputs["risk_file_source_text"] == "# risk file source\n"
+    assert kickoff_inputs["risk_search_source_text"] == "# risk search source\n"
+
+    assert "history_background_search_source_text" not in kickoff_inputs
+    assert "business_search_source_text" not in kickoff_inputs
+    assert "peer_info_peer_list_source_text" not in kickoff_inputs
+    assert "finance_analysis_text" not in kickoff_inputs
+    assert "operating_metrics_search_source_text" not in kickoff_inputs
+    assert checkpoint_codes == ["cp05_thesis"]
+    assert flow.state.bull_thesis_path.endswith("01_bull_thesis.md")
+    assert flow.state.neutral_thesis_path.endswith("02_neutral_thesis.md")
+    assert flow.state.bear_thesis_path.endswith("03_bear_thesis.md")
+    assert flow.state.investment_thesis_path.endswith("04_investment_thesis.md")
+
+
 def test_final_report_markdown_includes_finance_source_appendix(tmp_path) -> None:
     """
     目的：锁定最终报告附录仍会包含财务 file source 正文。
@@ -487,3 +655,355 @@ def test_run_analysis_phase_returns_current_event_name(tmp_path, monkeypatch) ->
     monkeypatch.setattr(flow, "_run_analysis_stage", lambda: "analysis")
 
     assert flow.run_analysis_phase() == ANALYSIS_STAGE_COMPLETED_EVENT
+
+
+def test_publish_if_passed_passes_writeup_inputs_and_records_new_artifacts(tmp_path, monkeypatch) -> None:
+    """
+    目的：锁定 publish 阶段会把 pitch、snapshot 所需文本和路径完整传给 writeup crew。
+    功能：检查新增的 pack/thesis 文本输入、两个新产物路径，以及 cp06 checkpoint 记录没有漏项。
+    实现逻辑：用假 writeup crew 承接 kickoff，再直接调用 `publish_if_passed()` 做编排断言。
+    可调参数：`tmp_path` 与 `monkeypatch`。
+    默认参数及原因：不启动真实 LLM 和工具，原因是这里验证的是 Flow 接线而不是内容生成质量。
+    """
+
+    flow = _build_flow(tmp_path)
+    kickoff_inputs: dict[str, str] = {}
+    checkpoint_payloads: dict[str, dict[str, str]] = {}
+
+    text_inputs = {
+        "investment_thesis_path": "# thesis\nthesis text\n",
+        "history_background_pack_path": "# history\nhistory pack\n",
+        "industry_pack_path": "# industry\nindustry pack\n",
+        "business_pack_path": "# business\nbusiness pack\n",
+        "peer_info_pack_path": "# peer\npeer pack\n",
+        "finance_pack_path": "# finance\nfinance pack\n",
+        "operating_metrics_pack_path": "# metrics\nmetrics pack\n",
+        "risk_pack_path": "# risk\nrisk pack\n",
+        "valuation_pack_path": "# valuation\nvaluation pack\n",
+    }
+    for attr, content in text_inputs.items():
+        path = tmp_path / f"{attr}.md"
+        path.write_text(content, encoding="utf-8")
+        setattr(flow.state, attr, path.as_posix())
+
+    class FakeWriteupCrew:
+        """
+        目的：模拟 writeup 阶段的最小 crew 接口。
+        功能：接收 Flow 拼好的输入，并写出四个阶段产物占位文件。
+        实现逻辑：在 kickoff 时记录 inputs，再按约定路径落地假文件。
+        可调参数：无。
+        默认参数及原因：输出内容使用固定占位文本，原因是这里只验证编排和路径。
+        """
+
+        def __init__(self) -> None:
+            self.output_log_file_path = None
+
+        def crew(self):
+            class Runner:
+                def kickoff(self, inputs: dict[str, str]) -> None:
+                    kickoff_inputs.update(inputs)
+                    Path(inputs["final_report_markdown_path"]).write_text("# report\n", encoding="utf-8")
+                    Path(inputs["pitch_material_markdown_path"]).write_text("# pitch\n", encoding="utf-8")
+                    Path(inputs["investment_snapshot_ppt_path"]).write_bytes(b"PPT")
+                    Path(inputs["final_report_pdf_path"]).write_bytes(b"PDF")
+
+            return Runner()
+
+    monkeypatch.setattr(research_flow_module, "WriteupCrew", FakeWriteupCrew)
+    monkeypatch.setattr(flow, "_prepare_tool_context", lambda: None)
+    monkeypatch.setattr(flow, "_configure_crew_log", lambda crew, log_path: crew)
+    monkeypatch.setattr(flow, "_extract_writeup_tool_error_message", lambda: "")
+    monkeypatch.setattr(flow, "_write_final_report_markdown", lambda: Path(flow.state.final_report_markdown_path).write_text("# report\n", encoding="utf-8"))
+    monkeypatch.setattr(flow, "_log_flow", lambda message: "flow.log")
+    monkeypatch.setattr(
+        flow,
+        "_write_checkpoint",
+        lambda checkpoint_code, payload: checkpoint_payloads.setdefault(checkpoint_code, payload) or "checkpoint.json",
+    )
+
+    result = flow.publish_if_passed()
+
+    assert result == flow.state.final_report_pdf_path
+    assert kickoff_inputs["pitch_material_markdown_path"] == flow.state.pitch_material_markdown_path
+    assert kickoff_inputs["investment_snapshot_ppt_path"] == flow.state.investment_snapshot_ppt_path
+    assert kickoff_inputs["investment_thesis_text"] == "# thesis\nthesis text\n"
+    assert kickoff_inputs["history_background_pack_text"] == "# history\nhistory pack\n"
+    assert kickoff_inputs["industry_pack_text"] == "# industry\nindustry pack\n"
+    assert kickoff_inputs["business_pack_text"] == "# business\nbusiness pack\n"
+    assert kickoff_inputs["finance_pack_text"] == "# finance\nfinance pack\n"
+    assert kickoff_inputs["valuation_pack_text"] == "# valuation\nvaluation pack\n"
+    assert kickoff_inputs["risk_pack_text"] == "# risk\nrisk pack\n"
+    assert Path(flow.state.pitch_material_markdown_path).exists()
+    assert Path(flow.state.investment_snapshot_ppt_path).exists()
+    assert checkpoint_payloads["cp06_writeup"]["pitch_material_markdown_path"] == flow.state.pitch_material_markdown_path
+    assert checkpoint_payloads["cp06_writeup"]["investment_snapshot_ppt_path"] == flow.state.investment_snapshot_ppt_path
+
+
+def test_publish_if_passed_fails_when_snapshot_artifact_is_missing(tmp_path, monkeypatch) -> None:
+    """
+    目的：锁定 writeup 阶段缺少 PPT 实物时会直接失败，而不是继续把 run 标记为 completed。
+    功能：检查 `publish_if_passed()` 会把缺失的 snapshot 产物升级成 writeup 阶段异常。
+    实现逻辑：让假 writeup crew 只写 Markdown、pitch 和 PDF，不生成 PPT，再断言 flow 失败状态。
+    可调参数：`tmp_path` 与 `monkeypatch`。
+    默认参数及原因：不启动真实 agent，原因是这里验证的是主流程成功条件收紧逻辑。
+    """
+
+    flow = _build_flow(tmp_path)
+
+    text_inputs = {
+        "investment_thesis_path": "# thesis\nthesis text\n",
+        "history_background_pack_path": "# history\nhistory pack\n",
+        "industry_pack_path": "# industry\nindustry pack\n",
+        "business_pack_path": "# business\nbusiness pack\n",
+        "peer_info_pack_path": "# peer\npeer pack\n",
+        "finance_pack_path": "# finance\nfinance pack\n",
+        "operating_metrics_pack_path": "# metrics\nmetrics pack\n",
+        "risk_pack_path": "# risk\nrisk pack\n",
+        "valuation_pack_path": "# valuation\nvaluation pack\n",
+    }
+    for attr, content in text_inputs.items():
+        path = tmp_path / f"{attr}.md"
+        path.write_text(content, encoding="utf-8")
+        setattr(flow.state, attr, path.as_posix())
+
+    class FakeWriteupCrew:
+        """
+        目的：模拟缺失 snapshot 产物的 writeup crew。
+        功能：只生成其余产物，故意留空 PPT 文件。
+        实现逻辑：在 kickoff 时只写 report、pitch 和 PDF。
+        可调参数：无。
+        默认参数及原因：故意不写 snapshot，原因是要覆盖真实故障路径。
+        """
+
+        def __init__(self) -> None:
+            self.output_log_file_path = None
+
+        def crew(self):
+            class Runner:
+                def kickoff(self, inputs: dict[str, str]) -> None:
+                    Path(inputs["final_report_markdown_path"]).write_text("# report\n", encoding="utf-8")
+                    Path(inputs["pitch_material_markdown_path"]).write_text("# pitch\n", encoding="utf-8")
+                    Path(inputs["final_report_pdf_path"]).write_bytes(b"PDF")
+
+            return Runner()
+
+    monkeypatch.setattr(research_flow_module, "WriteupCrew", FakeWriteupCrew)
+    monkeypatch.setattr(flow, "_prepare_tool_context", lambda: None)
+    monkeypatch.setattr(flow, "_configure_crew_log", lambda crew, log_path: crew)
+    monkeypatch.setattr(
+        flow,
+        "_write_final_report_markdown",
+        lambda: Path(flow.state.final_report_markdown_path).write_text("# report\n", encoding="utf-8"),
+    )
+    monkeypatch.setattr(flow, "_log_flow", lambda message: "flow.log")
+    monkeypatch.setattr(flow, "_write_manifest_from_state", lambda status: status)
+    monkeypatch.setattr(flow, "_write_checkpoint", lambda checkpoint_code, payload: "checkpoint.json")
+
+    with pytest.raises(RuntimeError) as exc_info:
+        flow.publish_if_passed()
+
+    error_message = str(exc_info.value)
+    assert "Missing writeup artifacts" in error_message
+    assert "investment_snapshot_ppt_path" in error_message
+    assert flow.state.failed_stage == "writeup"
+    assert flow.state.failed_crew == "writeup_crew"
+    assert "Missing writeup artifacts" in flow.state.error_message
+
+
+def test_publish_if_passed_fails_when_writeup_log_contains_tool_error(tmp_path, monkeypatch) -> None:
+    """
+    目的：锁定即使产物文件已写出，只要 writeup 日志记录了工具错误，主流程也不能算成功。
+    功能：检查 `Error executing tool:` 会被提升为 writeup 阶段异常。
+    实现逻辑：让假 writeup crew 同时写出四个产物和一条工具错误日志，再断言 flow 失败状态。
+    可调参数：`tmp_path` 与 `monkeypatch`。
+    默认参数及原因：保留全部产物文件，原因是要单独证明日志错误本身就足以阻止伪成功。
+    """
+
+    flow = _build_flow(tmp_path)
+
+    text_inputs = {
+        "investment_thesis_path": "# thesis\nthesis text\n",
+        "history_background_pack_path": "# history\nhistory pack\n",
+        "industry_pack_path": "# industry\nindustry pack\n",
+        "business_pack_path": "# business\nbusiness pack\n",
+        "peer_info_pack_path": "# peer\npeer pack\n",
+        "finance_pack_path": "# finance\nfinance pack\n",
+        "operating_metrics_pack_path": "# metrics\nmetrics pack\n",
+        "risk_pack_path": "# risk\nrisk pack\n",
+        "valuation_pack_path": "# valuation\nvaluation pack\n",
+    }
+    for attr, content in text_inputs.items():
+        path = tmp_path / f"{attr}.md"
+        path.write_text(content, encoding="utf-8")
+        setattr(flow.state, attr, path.as_posix())
+
+    class FakeWriteupCrew:
+        """
+        目的：模拟带有工具错误日志的 writeup crew。
+        功能：写出所有产物，同时在 crew 日志里留下 `Error executing tool:`。
+        实现逻辑：利用 flow 注入的 `output_log_file_path` 落日志，再正常生成占位产物。
+        可调参数：无。
+        默认参数及原因：同时生成产物与错误日志，原因是要覆盖“有文件但仍应失败”的分支。
+        """
+
+        def __init__(self) -> None:
+            self.output_log_file_path = None
+
+        def crew(self):
+            owner = self
+
+            class Runner:
+                def kickoff(self, inputs: dict[str, str]) -> None:
+                    Path(inputs["final_report_markdown_path"]).write_text("# report\n", encoding="utf-8")
+                    Path(inputs["pitch_material_markdown_path"]).write_text("# pitch\n", encoding="utf-8")
+                    Path(inputs["investment_snapshot_ppt_path"]).write_bytes(b"PPT")
+                    Path(inputs["final_report_pdf_path"]).write_bytes(b"PDF")
+                    Path(owner.output_log_file_path).write_text(
+                        '2026-04-16 17:05:58: output="Error executing tool: snapshot tool failed."\n',
+                        encoding="utf-8",
+                    )
+
+            return Runner()
+
+    monkeypatch.setattr(research_flow_module, "WriteupCrew", FakeWriteupCrew)
+    monkeypatch.setattr(flow, "_prepare_tool_context", lambda: None)
+    monkeypatch.setattr(
+        flow,
+        "_write_final_report_markdown",
+        lambda: Path(flow.state.final_report_markdown_path).write_text("# report\n", encoding="utf-8"),
+    )
+    monkeypatch.setattr(flow, "_log_flow", lambda message: "flow.log")
+    monkeypatch.setattr(flow, "_write_manifest_from_state", lambda status: status)
+    monkeypatch.setattr(flow, "_write_checkpoint", lambda checkpoint_code, payload: "checkpoint.json")
+
+    with pytest.raises(RuntimeError) as exc_info:
+        flow.publish_if_passed()
+
+    error_message = str(exc_info.value)
+    assert "Writeup crew reported tool execution error" in error_message
+    assert "Error executing tool:" in error_message
+    assert flow.state.failed_stage == "writeup"
+    assert flow.state.failed_crew == "writeup_crew"
+    assert "Error executing tool:" in flow.state.error_message
+
+
+def test_validate_final_report_period_headers_accepts_valid_current_period_columns(tmp_path) -> None:
+    """
+    目的：锁住最终 Markdown 在期间列全部合法时不会被守卫误杀。
+    功能：验证经营指标和财务章节只要都保留实际当前期列名，就能通过校验。
+    实现逻辑：写入带 `2025H1A` 的最小 metadata 和最小报告样例，再直接调用校验函数。
+    可调参数：`tmp_path`。
+    默认参数及原因：默认用最小两张表，原因是这里关注表头契约而不是正文长度。
+    """
+
+    flow = _build_flow(tmp_path)
+    _write_document_metadata_with_periods(flow, current_period="2025H1A")
+
+    report_text = """# Report
+## 6. 经营指标分析
+| 指标名称 | 2022A | 2023A | 2024A | 2025H1A |
+| --- | --- | --- | --- | --- |
+| 销量 | 1 | 2 | 3 | 4 |
+
+## 7. 财务分析
+| 指标名称 | 2022A | 2023A | 2024A | 2025H1A |
+| --- | --- | --- | --- | --- |
+| 营业收入 | 1 | 2 | 3 | 4 |
+"""
+
+    flow._validate_final_report_period_headers(report_text)
+
+
+@pytest.mark.parametrize(
+    ("invalid_header", "expected_fragment"),
+    [
+        ("| 指标名称 | 2022A | 2023A | 2024A | {FQ0/FY0} |", "{FQ0/FY0}"),
+        ("| 指标名称 | FY-2022 | 2023A | 2024A | 2025H1A |", "FY-2022"),
+        ("| 指标名称 | 2022A | 2023A | 2024A | FQ0/2025H1 |", "FQ0/2025H1"),
+        ("| 指标名称 | 2022A | 2023A | 2024A | FY0 |", "FY0"),
+    ],
+)
+def test_validate_final_report_period_headers_rejects_invalid_labels(
+    tmp_path,
+    invalid_header: str,
+    expected_fragment: str,
+) -> None:
+    """
+    目的：锁住最终 Markdown 中的非法期间列标签会被立即拦截。
+    功能：覆盖未替换占位符、FY 年份混合标签、FQ0/实际期间混合标签和孤立 FY0。
+    实现逻辑：构造最小报告，并把非法表头同时放进经营指标和财务章节后断言抛错。
+    可调参数：临时目录、非法表头和期望命中片段。
+    默认参数及原因：默认两节共用同一非法表头，原因是这里关注全文守卫而不是章节差异。
+    """
+
+    flow = _build_flow(tmp_path)
+    _write_document_metadata_with_periods(flow, current_period="2025H1A")
+
+    report_text = f"""# Report
+## 6. 经营指标分析
+{invalid_header}
+| --- | --- | --- | --- | --- |
+| 销量 | 1 | 2 | 3 | 4 |
+
+## 7. 财务分析
+{invalid_header}
+| --- | --- | --- | --- | --- |
+| 营业收入 | 1 | 2 | 3 | 4 |
+"""
+
+    with pytest.raises(RuntimeError) as exc_info:
+        flow._validate_final_report_period_headers(report_text)
+
+    assert expected_fragment in str(exc_info.value)
+
+
+def test_validate_final_report_period_headers_rejects_missing_current_period_column(tmp_path) -> None:
+    """
+    目的：锁住 metadata 已识别出当前期时，最终报告不能静默丢掉当前期列。
+    功能：验证经营指标和财务章节都缺少 `2025H1A` 列时会直接失败。
+    实现逻辑：使用合法但不含当前期的表头生成最小报告，再断言缺列异常。
+    可调参数：`tmp_path`。
+    默认参数及原因：默认只保留三年历史列，原因是这正是本轮 finance pack 的真实坏样子。
+    """
+
+    flow = _build_flow(tmp_path)
+    _write_document_metadata_with_periods(flow, current_period="2025H1A")
+
+    report_text = """# Report
+## 6. 经营指标分析
+| 指标名称 | 2022A | 2023A | 2024A |
+| --- | --- | --- | --- |
+| 销量 | 1 | 2 | 3 |
+
+## 7. 财务分析
+| 指标名称 | 2022A | 2023A | 2024A |
+| --- | --- | --- | --- |
+| 营业收入 | 1 | 2 | 3 |
+"""
+
+    with pytest.raises(RuntimeError) as exc_info:
+        flow._validate_final_report_period_headers(report_text)
+
+    assert "2025H1A" in str(exc_info.value)
+    assert "经营指标分析" in str(exc_info.value)
+    assert "财务分析" in str(exc_info.value)
+
+
+def test_write_manifest_from_state_records_pitch_and_snapshot_paths(tmp_path) -> None:
+    """
+    目的：锁定 run manifest 已记录新增的 pitch markdown 和 snapshot ppt 路径。
+    功能：检查 manifest 文件中的新字段名和值都与 state 保持一致。
+    实现逻辑：构建最小 flow state，调用真实 `_write_manifest_from_state()` 后读取 JSON 断言。
+    可调参数：`tmp_path`。
+    默认参数及原因：只关心 manifest 新字段，原因是其他字段已由现有测试覆盖。
+    """
+
+    flow = _build_flow(tmp_path)
+    flow.state.analysis_source_dir = (tmp_path / "analysis" / "sources").as_posix()
+    Path(flow.state.analysis_source_dir).mkdir(parents=True, exist_ok=True)
+
+    manifest_path = flow._write_manifest_from_state("completed")
+    manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+
+    assert manifest["pitch_material_markdown_path"] == flow.state.pitch_material_markdown_path
+    assert manifest["investment_snapshot_ppt_path"] == flow.state.investment_snapshot_ppt_path

@@ -6,7 +6,7 @@ import re
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, TypeAlias
 
 import fitz
 from crewai.tools import BaseTool
@@ -28,6 +28,49 @@ _ACTIVE_PAGE_INDEX_DIR: Path | None = None
 
 MAX_TOOL_PAGE_READ = 100
 PAGE_INDEX_FORMAT_VERSION = 3
+PAGE_INDEX_ALLOWED_TOPICS = (
+    "行业",
+    "业务",
+    "产品",
+    "技术",
+    "财务",
+    "历史",
+    "公司治理",
+    "发行方案",
+    "估值",
+    "股东",
+    "风险",
+    "市场",
+    "竞争",
+    "募投项目",
+    "资产",
+    "目录",
+    "声明",
+    "封面",
+    "其他",
+)
+
+PdfPageMatchedTopic: TypeAlias = Literal[
+    "行业",
+    "业务",
+    "产品",
+    "技术",
+    "财务",
+    "历史",
+    "公司治理",
+    "发行方案",
+    "估值",
+    "股东",
+    "风险",
+    "市场",
+    "竞争",
+    "募投项目",
+    "资产",
+    "目录",
+    "声明",
+    "封面",
+    "其他",
+]
 
 
 def reset_pdf_page_tool_runtime_state() -> None:
@@ -85,9 +128,9 @@ class PdfPageIndexPayload(BaseModel):
 class ReadPdfPageIndexInput(BaseModel):
     """
     设计目的：定义读取页索引工具的输入格式。
-    模块功能：约束 PDF 路径、关键词过滤和返回条数限制。
-    实现逻辑：通过 Pydantic 校验 `pdf_path`、`keyword` 和 `max_results`。
-    可调参数：`pdf_path`、`keyword` 和 `max_results`。
+    模块功能：约束 PDF 路径、固定主题过滤和返回条数限制。
+    实现逻辑：通过 Pydantic 校验 `pdf_path`、`matched_topic` 和 `max_results`。
+    可调参数：`pdf_path`、`matched_topic` 和 `max_results`。
     默认参数及原因：`max_results` 默认 0，原因是 0 更适合表达“不截断”。
     """
 
@@ -95,9 +138,9 @@ class ReadPdfPageIndexInput(BaseModel):
         ...,
         description="当前要读取的 PDF 绝对路径。必须显式传入任务输入里的 `pdf_file_path`。",
     )
-    keyword: str = Field(
-        default="",
-        description="可选关键词。留空时返回完整页索引。",
+    matched_topic: PdfPageMatchedTopic | None = Field(
+        default=None,
+        description="可选固定主题。留空时返回完整页索引；传入时只返回 `matched_topics` 包含该主题的页面。",
     )
     max_results: int = Field(
         default=0,
@@ -452,25 +495,31 @@ class ReadPdfPageIndexTool(BaseTool):
     """
     设计目的：要求 agent 在读正文前先浏览页索引。
     模块功能：返回完整或筛选后的逐页主题列表。
-    实现逻辑：读取当前页索引，根据关键词过滤，再按上限截断结果。
-    可调参数：`keyword` 和 `max_results`。
+    实现逻辑：读取当前页索引，根据固定主题精确过滤，再按上限截断结果。
+    可调参数：`matched_topic` 和 `max_results`。
     默认参数及原因：默认返回全量索引，原因是先看全局再缩小范围更稳妥。
     """
 
     name: str = "read_pdf_page_index"
     description: str = (
         "Read the current PDF page index JSON. Always call this first before reading any PDF page."
-        " Use the page-by-page topic list to decide which exact pages are relevant to the current task. "
+        " Use the page-by-page topic list to decide which exact pages are relevant to the current task."
+        " Prefer filtering by the fixed `matched_topic` enum so you first narrow pages by topic class and then read specific pages. "
         "You must explicitly pass the current task input `pdf_file_path` into the `pdf_path` argument."
     )
     args_schema: type[BaseModel] = ReadPdfPageIndexInput
 
-    def _run(self, pdf_path: str, keyword: str = "", max_results: int = 0) -> str:
+    def _run(
+        self,
+        pdf_path: str,
+        matched_topic: PdfPageMatchedTopic | None = None,
+        max_results: int = 0,
+    ) -> str:
         """
         设计目的：强制 agent 先看索引，再决定读哪些页。
         模块功能：返回完整或过滤后的逐页索引 JSON。
-        实现逻辑：读取当前索引后，按 `topic`、`matched_topics` 和页码做过滤。
-        可调参数：关键词和最大结果数。
+        实现逻辑：读取当前索引后，只按 `matched_topics` 中是否包含固定主题做精确过滤。
+        可调参数：固定主题和最大结果数。
         默认参数及原因：`max_results=0` 表示不过滤数量，原因是有些任务需要先看全量索引再缩小范围。
         """
 
@@ -478,14 +527,16 @@ class ReadPdfPageIndexTool(BaseTool):
         index_data = load_page_index()
         pages = index_data.get("pages", [])
 
-        if keyword:
-            lowered_keyword = keyword.lower().strip()
+        if matched_topic is not None:
+            if matched_topic not in PAGE_INDEX_ALLOWED_TOPICS:
+                raise ValueError(
+                    "Invalid matched_topic. It must be one of: "
+                    + "、".join(PAGE_INDEX_ALLOWED_TOPICS)
+                )
             pages = [
                 page
                 for page in pages
-                if lowered_keyword in str(page.get("topic", "")).lower()
-                or lowered_keyword in " ".join(page.get("matched_topics", [])).lower()
-                or lowered_keyword in str(page.get("page_number", ""))
+                if matched_topic in page.get("matched_topics", [])
             ]
 
         if max_results > 0:

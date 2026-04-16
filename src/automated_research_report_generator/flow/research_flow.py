@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -67,6 +68,19 @@ from automated_research_report_generator.tools.pdf_page_tools import (
 ANALYSIS_STAGE_COMPLETED_EVENT = "analysis_stage_completed"
 VALUATION_STAGE_COMPLETED_EVENT = "valuation_stage_completed"
 THESIS_STAGE_COMPLETED_EVENT = "thesis_stage_completed"
+
+MARKDOWN_TABLE_SEPARATOR_PATTERN = re.compile(r"^\|(?:\s*:?-{3,}:?\s*\|)+\s*$")
+INVALID_PERIOD_HEADER_PATTERNS = (
+    (re.compile(r"\{FQ0/FY0\}"), "{FQ0/FY0}"),
+    (re.compile(r"\{FQ0_OR_FY0\}"), "{FQ0_OR_FY0}"),
+    (re.compile(r"\bFY-\d{4}\b"), "FY-2022"),
+    (re.compile(r"\bFQ0/\d{4}(?:A|H[12]|Q[1-4])\b"), "FQ0/2025H1"),
+    (re.compile(r"(?<![A-Za-z0-9])FY0(?![A-Za-z0-9])"), "FY0"),
+)
+REQUIRED_CURRENT_PERIOD_SECTION_HEADINGS = (
+    ("## 6. 经营指标分析", "经营指标分析"),
+    ("## 7. 财务分析", "财务分析"),
+)
 
 STAGE_FAILURE_CHECKPOINT_CODES = {
     "analysis": "cp03_analysis_failed",
@@ -208,6 +222,10 @@ class ResearchReportFlow(Flow[ResearchFlowState]):
         self.state.run_output_dir = artifact_dir.as_posix()
         self.state.final_report_markdown_path = (artifact_dir / f"{pdf_path.stem}_v2_report.md").as_posix()
         self.state.final_report_pdf_path = (artifact_dir / f"{pdf_path.stem}_v2_report.pdf").as_posix()
+        self.state.pitch_material_markdown_path = (artifact_dir / f"{pdf_path.stem}_pitch_material.md").as_posix()
+        self.state.investment_snapshot_ppt_path = (
+            artifact_dir / f"{pdf_path.stem}_investment_snapshot.pptx"
+        ).as_posix()
 
         activate_run_preprocess_log(self.state.run_slug)
         activate_page_index_directory(indexing_dir)
@@ -289,9 +307,9 @@ class ResearchReportFlow(Flow[ResearchFlowState]):
     def publish_if_passed(self):
         """
         目的：在 thesis 阶段完成后生成最终报告。
-        功能：先由 Flow 确定性拼装最终 Markdown，再调用 writeup crew 做非破坏性确认和 PDF 导出。
-        实现逻辑：WriteupCrew 不再负责重写正文，只消费 Flow 已经拼装好的稳定稿件。
-        可调参数：最终报告路径和 PDF 输出路径。
+        功能：先由 Flow 确定性拼装最终 Markdown，再调用 writeup crew 生成 pitch material、snapshot PPT 和 PDF。
+        实现逻辑：WriteupCrew 不负责重写正文，只消费 Flow 已经拼装好的稳定稿件与各专题 pack 文本。
+        可调参数：最终报告路径、pitch 路径、snapshot 路径和 PDF 输出路径。
         默认参数及原因：默认复用 state 中已经确定的路径，原因是最终产物位置需要稳定可追踪。
         """
 
@@ -305,11 +323,15 @@ class ResearchReportFlow(Flow[ResearchFlowState]):
             )
             writeup_crew.crew().kickoff(
                 inputs=self._base_inputs()
+                | self._writeup_stage_text_inputs()
                 | {
                     "final_report_markdown_path": self.state.final_report_markdown_path,
                     "final_report_pdf_path": self.state.final_report_pdf_path,
+                    "pitch_material_markdown_path": self.state.pitch_material_markdown_path,
+                    "investment_snapshot_ppt_path": self.state.investment_snapshot_ppt_path,
                 }
             )
+            self._assert_writeup_artifacts_ready()
         except Exception as exc:
             self._record_stage_failure(
                 stage="writeup",
@@ -318,6 +340,8 @@ class ResearchReportFlow(Flow[ResearchFlowState]):
                 checkpoint_payload={
                     "final_report_markdown_path": self.state.final_report_markdown_path,
                     "final_report_pdf_path": self.state.final_report_pdf_path,
+                    "pitch_material_markdown_path": self.state.pitch_material_markdown_path,
+                    "investment_snapshot_ppt_path": self.state.investment_snapshot_ppt_path,
                 },
             )
             raise
@@ -329,11 +353,15 @@ class ResearchReportFlow(Flow[ResearchFlowState]):
             {
                 "final_report_markdown_path": self.state.final_report_markdown_path,
                 "final_report_pdf_path": self.state.final_report_pdf_path,
+                "pitch_material_markdown_path": self.state.pitch_material_markdown_path,
+                "investment_snapshot_ppt_path": self.state.investment_snapshot_ppt_path,
             },
         )
         self._log_flow(
             "publish_if_passed completed | "
             f"final_report_markdown_path={self.state.final_report_markdown_path} | "
+            f"pitch_material_markdown_path={self.state.pitch_material_markdown_path} | "
+            f"investment_snapshot_ppt_path={self.state.investment_snapshot_ppt_path} | "
             f"final_report_pdf_path={self.state.final_report_pdf_path}"
         )
         return self.state.final_report_pdf_path
@@ -616,7 +644,7 @@ class ResearchReportFlow(Flow[ResearchFlowState]):
         """
         目的：封装 thesis 阶段的实际执行逻辑。
         功能：运行 bull / neutral / bear / synthesizer 四个任务，并登记最终投资逻辑产物。
-        实现逻辑：把 analysis、valuation 和 diligence 文本一次性注入 thesis crew，再把输出路径写回 state。
+        实现逻辑：把 analysis、valuation、diligence 和 thesis 需要的关键 source 文本一次性注入 thesis crew，再把输出路径写回 state。
         可调参数：thesis 目录和各类上游文本输入。
         默认参数及原因：默认保留三份立场稿和一份最终稿，原因是需要保留多视角辩论痕迹。
         """
@@ -633,20 +661,8 @@ class ResearchReportFlow(Flow[ResearchFlowState]):
         try:
             thesis_crew.crew().kickoff(
                 inputs=self._base_inputs()
-                | {
-                    "thesis_output_dir": thesis_dir.as_posix(),
-                    "history_background_pack_text": self._read(self.state.history_background_pack_path),
-                    "industry_pack_text": self._read(self.state.industry_pack_path),
-                    "business_pack_text": self._read(self.state.business_pack_path),
-                    "peer_info_pack_text": self._read(self.state.peer_info_pack_path),
-                    "finance_pack_text": self._read(self.state.finance_pack_path),
-                    "operating_metrics_pack_text": self._read(self.state.operating_metrics_pack_path),
-                    "risk_pack_text": self._read(self.state.risk_pack_path),
-                    "peers_pack_text": self._read(self.state.peers_pack_path),
-                    "intrinsic_value_pack_text": self._read(self.state.intrinsic_value_pack_path),
-                    "valuation_pack_text": self._read(self.state.valuation_pack_path),
-                    "diligence_questions_text": self._read(self.state.diligence_questions_path),
-                }
+                | {"thesis_output_dir": thesis_dir.as_posix()}
+                | self._thesis_stage_text_inputs()
             )
         except Exception as exc:
             self._record_stage_failure(
@@ -750,6 +766,115 @@ class ResearchReportFlow(Flow[ResearchFlowState]):
             "operating_metrics_pack_text": self._read(self.state.operating_metrics_pack_path),
             "risk_pack_text": self._read(self.state.risk_pack_path),
         }
+
+    def _thesis_stage_text_inputs(self) -> dict[str, str]:
+        """
+        目的：统一收口 thesis 阶段需要消费的 pack、估值、尽调与关键 source 文本。
+        功能：为 bull / neutral / bear / synthesizer 提供“结论材料 + 原始事实材料”的固定输入边界。
+        实现逻辑：复用 7 个专题 pack，再补 3 个估值/尽调文本和 thesis 阶段真正需要的 10 份 source 或 supporting text。
+        可调参数：当前无显式参数。
+        默认参数及原因：默认缺文件时返回空串，原因是 prompt 需要能显式识别“可退回引用 pack，但不可伪造 source 事实”的场景。
+        """
+
+        source_inputs = self._analysis_source_text_inputs()
+        selected_source_keys = [
+            "history_background_file_source_text",
+            "industry_file_source_text",
+            "industry_search_source_text",
+            "business_file_source_text",
+            "peer_info_peer_data_source_text",
+            "finance_file_source_text",
+            "finance_computed_metrics_text",
+            "operating_metrics_file_source_text",
+            "risk_file_source_text",
+            "risk_search_source_text",
+        ]
+
+        return self._analysis_pack_text_inputs() | {
+            "peers_pack_text": self._read(self.state.peers_pack_path),
+            "intrinsic_value_pack_text": self._read(self.state.intrinsic_value_pack_path),
+            "valuation_pack_text": self._read(self.state.valuation_pack_path),
+            "diligence_questions_text": self._read(self.state.diligence_questions_path),
+            **{key: source_inputs.get(key, "") for key in selected_source_keys},
+        }
+
+    def _writeup_stage_text_inputs(self) -> dict[str, str]:
+        """
+        目的：统一收口 writeup 阶段需要消费的 pack 与 thesis 文本。
+        功能：为 pitch material、snapshot PPT 和 PDF 导出阶段提供固定输入边界。
+        实现逻辑：复用 7 个专题 pack 文本，再补充 thesis 与 valuation 结果文本。
+        可调参数：当前无显式参数。
+        默认参数及原因：默认直接从 state 路径读取，原因是 writeup 阶段只消费上游已经沉淀好的文本产物。
+        """
+
+        return self._analysis_pack_text_inputs() | {
+            "investment_thesis_text": self._read(self.state.investment_thesis_path),
+            "valuation_pack_text": self._read(self.state.valuation_pack_path),
+        }
+
+    def _assert_writeup_artifacts_ready(self) -> None:
+        """
+        目的：把 writeup 阶段的成功条件收紧为“日志无工具错误且产物真实落盘”。
+        功能：在 crew 执行结束后检查关键输出文件是否存在，并识别日志中的工具执行错误。
+        实现逻辑：先扫描 `writeup_crew` 日志中的 `Error executing tool:`，再检查 Markdown、pitch、PPT 和 PDF 四个产物路径。
+        可调参数：当前无显式参数，检查目标全部来自 state 中已经确定的产物路径。
+        默认参数及原因：发现任一工具错误或缺失产物就直接抛错，原因是 writeup 阶段不允许再出现“伪完成”。
+        """
+
+        tool_error_message = self._extract_writeup_tool_error_message()
+        missing_artifacts: list[str] = []
+        expected_artifacts = {
+            "final_report_markdown_path": self.state.final_report_markdown_path,
+            "pitch_material_markdown_path": self.state.pitch_material_markdown_path,
+            "investment_snapshot_ppt_path": self.state.investment_snapshot_ppt_path,
+            "final_report_pdf_path": self.state.final_report_pdf_path,
+        }
+
+        for label, artifact_path in expected_artifacts.items():
+            resolved_path = Path(
+                ensure_runtime_artifact_path_allowed(
+                    artifact_path,
+                    label=label,
+                )
+            ).expanduser().resolve()
+            if not resolved_path.exists():
+                missing_artifacts.append(f"{label}={resolved_path.as_posix()}")
+
+        if not tool_error_message and not missing_artifacts:
+            return
+
+        message_parts: list[str] = []
+        if tool_error_message:
+            message_parts.append(tool_error_message)
+        if missing_artifacts:
+            message_parts.append(f"Missing writeup artifacts: {', '.join(missing_artifacts)}")
+        raise RuntimeError(" | ".join(message_parts))
+
+    def _extract_writeup_tool_error_message(self) -> str:
+        """
+        目的：从 writeup 日志中提取最新一条工具执行错误。
+        功能：把 CrewAI 只写入日志但未抛出的工具失败重新转成主流程可感知的错误。
+        实现逻辑：读取 `writeup_crew.txt`，倒序查找最后一条包含 `Error executing tool:` 的日志行。
+        可调参数：当前无显式参数，日志路径固定来自当前 run 的 crew 日志目录。
+        默认参数及原因：只取最后一条错误，原因是最接近最终失败原因，便于直接排查。
+        """
+
+        log_path = ensure_runtime_artifact_path_allowed(
+            self._crew_log_path("writeup_crew"),
+            label="writeup crew log path",
+        )
+        log_text = read_text_if_exists(log_path)
+        if not log_text:
+            return ""
+
+        error_lines = [
+            line.strip()
+            for line in log_text.splitlines()
+            if "Error executing tool:" in line
+        ]
+        if not error_lines:
+            return ""
+        return f"Writeup crew reported tool execution error: {error_lines[-1]}"
 
     def _analysis_source_text_inputs(self) -> dict[str, str]:
         """
@@ -987,6 +1112,7 @@ class ResearchReportFlow(Flow[ResearchFlowState]):
         report_path = Path(self.state.final_report_markdown_path).expanduser().resolve()
         ensure_directory(report_path.parent)
         report_text = self._build_final_report_markdown()
+        self._validate_final_report_period_headers(report_text)
         report_path.write_text(report_text, encoding="utf-8")
         self.state.final_report_markdown_path = report_path.as_posix()
         return self.state.final_report_markdown_path
@@ -1155,8 +1281,126 @@ class ResearchReportFlow(Flow[ResearchFlowState]):
                 continue
             if not (raw_key.startswith("{") and raw_key.endswith("}")):
                 continue
-            period_inputs[raw_key[1:-1]] = raw_value if isinstance(raw_value, str) else ""
+            normalized_key = raw_key[1:-1]
+            normalized_value = raw_value if isinstance(raw_value, str) else ""
+            period_inputs[normalized_key] = normalized_value
+            if normalized_key == "FQ0/FY0":
+                period_inputs["FQ0_OR_FY0"] = normalized_value
         return period_inputs
+
+    def _current_period_label(self) -> str:
+        """
+        目的：统一读取当前 run 的“当前期”实际列名。
+        功能：优先返回无斜杠别名 `FQ0_OR_FY0` 对应的实际期间标签，并向后兼容旧键 `FQ0/FY0`。
+        实现逻辑：复用 `_period_placeholder_inputs()`，先取新别名，再兜底旧键，最后统一去掉首尾空白。
+        可调参数：当前无显式参数，数据来源固定为 metadata periods。
+        默认参数及原因：缺少 metadata 时返回空字符串，原因是写报告阶段不应凭空推断期间标签。
+        """
+
+        period_inputs = self._period_placeholder_inputs()
+        return str(
+            period_inputs.get("FQ0_OR_FY0") or period_inputs.get("FQ0/FY0") or ""
+        ).strip()
+
+    def _extract_markdown_section(self, report_text: str, heading: str) -> str:
+        """
+        目的：从最终 Markdown 中切出指定二级标题对应的整段内容。
+        功能：按 `##` 二级标题边界提取某个报告章节，供后续期间表头校验复用。
+        实现逻辑：逐行扫描标题；命中后持续收集，直到遇到下一个二级标题或文本结束。
+        可调参数：`report_text` 是完整 Markdown，`heading` 是目标二级标题文本。
+        默认参数及原因：标题不存在时返回空字符串，原因是上层校验需要显式判断缺失而不是抛底层解析异常。
+        """
+
+        target_heading = heading.strip()
+        section_lines: list[str] = []
+        in_section = False
+
+        for line in report_text.splitlines():
+            stripped = line.strip()
+            if stripped == target_heading:
+                in_section = True
+            elif in_section and stripped.startswith("## "):
+                break
+
+            if in_section:
+                section_lines.append(line)
+
+        return "\n".join(section_lines).strip()
+
+    def _collect_markdown_table_headers(self, markdown_text: str) -> list[str]:
+        """
+        目的：只提取 Markdown 表格的真正表头行，避免把正文或数据行误当成校验对象。
+        功能：返回所有“下一行紧跟分隔符行”的表头文本，供期间列合法性检查使用。
+        实现逻辑：逐行扫描带 `|` 的行，并要求后一行满足 Markdown 分隔符格式，才认定为表头。
+        可调参数：`markdown_text` 是待扫描的 Markdown 文本。
+        默认参数及原因：没有表格时返回空列表，原因是让上层根据具体章节决定是否视为失败。
+        """
+
+        lines = markdown_text.splitlines()
+        headers: list[str] = []
+
+        for index, line in enumerate(lines[:-1]):
+            current_line = line.strip()
+            next_line = lines[index + 1].strip()
+            if not (current_line.startswith("|") and current_line.endswith("|")):
+                continue
+            if MARKDOWN_TABLE_SEPARATOR_PATTERN.match(next_line):
+                headers.append(current_line)
+
+        return headers
+
+    def _validate_final_report_period_headers(self, report_text: str) -> None:
+        """
+        目的：在 writeup 前拦截未替换占位符、混合期间标签和当前期列缺失。
+        功能：只检查最终 Markdown 的期间表头契约，避免 `{FQ0/FY0}`、`FY-2022`、`FQ0/2025H1`、`FY0` 等错误继续进入最终产物。
+        实现逻辑：先做全文占位符扫描，再只对 Markdown 表头跑非法模式校验，最后检查经营指标和财务章节是否保留当前期实际列名。
+        可调参数：`report_text` 是 Flow 已拼装完成但尚未落盘的最终 Markdown。
+        默认参数及原因：当前只强校验经营指标和财务两节，原因是本次故障先集中暴露在这两条链路。
+        """
+
+        issues: list[str] = []
+        unresolved_placeholders = [
+            placeholder
+            for placeholder in ("{FQ0/FY0}", "{FQ0_OR_FY0}")
+            if placeholder in report_text
+        ]
+        if unresolved_placeholders:
+            issues.append(
+                "发现未替换期间占位符: "
+                + ", ".join(sorted(set(unresolved_placeholders)))
+            )
+
+        table_headers = self._collect_markdown_table_headers(report_text)
+        for header in table_headers:
+            for pattern, sample in INVALID_PERIOD_HEADER_PATTERNS:
+                if pattern.search(header):
+                    issues.append(f"发现非法期间表头 `{sample}`: {header}")
+                    break
+
+        current_period_label = self._current_period_label()
+        if current_period_label:
+            missing_sections: list[str] = []
+            for heading, label in REQUIRED_CURRENT_PERIOD_SECTION_HEADINGS:
+                section_text = self._extract_markdown_section(report_text, heading)
+                if not section_text:
+                    continue
+                section_headers = self._collect_markdown_table_headers(section_text)
+                if not section_headers or not any(
+                    current_period_label in header for header in section_headers
+                ):
+                    missing_sections.append(label)
+
+            if missing_sections:
+                issues.append(
+                    f"当前期列 `{current_period_label}` 在以下章节缺失: "
+                    + ", ".join(missing_sections)
+                )
+
+        if issues:
+            raise RuntimeError(
+                "Invalid period headers in final report markdown: "
+                + " | ".join(issues)
+            )
 
     def _clear_run_outcome(self) -> None:
         """
@@ -1259,6 +1503,8 @@ class ResearchReportFlow(Flow[ResearchFlowState]):
             diligence_questions_path=self.state.diligence_questions_path,
             final_report_markdown_path=self.state.final_report_markdown_path,
             final_report_pdf_path=self.state.final_report_pdf_path,
+            pitch_material_markdown_path=self.state.pitch_material_markdown_path,
+            investment_snapshot_ppt_path=self.state.investment_snapshot_ppt_path,
             failed_stage=self.state.failed_stage,
             failed_crew=self.state.failed_crew,
             error_message=self.state.error_message,

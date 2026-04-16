@@ -38,10 +38,11 @@
    - 读取 7 个 analysis packs、3 个 valuation packs 与尽调问题
    - 产出 `01_bull_thesis.md`、`02_neutral_thesis.md`、`03_bear_thesis.md`、`04_investment_thesis.md`
 5. `publish_if_passed`
+   - `WriteupCrew` 现会在最终 Markdown 就绪后继续生成 `pitch material Markdown`、`investment snapshot PPTX` 和最终 `PDF`
    - Flow 先确定性拼装最终 Markdown
    - 正文固定覆盖 thesis、尽调问题、7 个 analysis packs、3 个 valuation packs
    - 附录固定拼入 `sources/` 目录下的 14 份 source md 全文
-   - `WriteupCrew` 只做非破坏性确认和 PDF 导出，不再改写正文
+   - `WriteupCrew` 只做非破坏性确认与导出，不再改写正文；导出产物现包含 `pitch material Markdown`、`investment snapshot PPTX` 和 `PDF`
 
 ## Crew 结构
 
@@ -116,8 +117,9 @@
   - 读取 7 个专题 pack、3 个 valuation packs 与 `diligence_questions_text`
   - 不额外读取 source md
 - `WriteupCrew`
-  - 只消费 `{final_report_markdown_path}` 和 `{final_report_pdf_path}`
-  - 不负责重写正文
+  - ???? Markdown ???? writeup ????? pack/thesis ????
+  - ?? `pitch material Markdown`?`investment snapshot PPTX` ? `PDF`
+  - ???????
 
 ## 运行产物
 
@@ -152,6 +154,8 @@
 - `.cache/<run_slug>/md/checkpoints/`
 - `.cache/<run_slug>/md/run_manifest.json`
 - `.cache/<run_slug>/md/<pdf_stem>_v2_report.md`
+- `.cache/<run_slug>/md/<pdf_stem>_pitch_material.md`
+- `.cache/<run_slug>/md/<pdf_stem>_investment_snapshot.pptx`
 - `.cache/<run_slug>/md/<pdf_stem>_v2_report.pdf`
 - `.cache/live_tests/<suite_id>/`
 - `.cache/live_tests/<suite_id>/suite_summary.json`
@@ -170,6 +174,8 @@
 - `diligence_questions_path`
 - `investment_thesis_path`
 - `final_report_markdown_path`
+- `pitch_material_markdown_path`
+- `investment_snapshot_ppt_path`
 - `final_report_pdf_path`
 - `console_log_file_path`
 - `crew_log_paths`

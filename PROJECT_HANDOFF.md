@@ -87,10 +87,11 @@
      - `04_investment_thesis.md`
    - 生成 `cp05_thesis`
 5. `publish_if_passed`
+   - `WriteupCrew` 现会在最终 Markdown 就绪后继续生成 `pitch material Markdown`、`investment snapshot PPTX` 和最终 `PDF`
    - Flow 先拼最终 Markdown
    - 正文固定覆盖 thesis、尽调问题、7 个 analysis packs、3 个 valuation packs
    - 附录固定拼入 `sources/` 目录下的 14 份 source md 全文
-   - `WriteupCrew` 只做确认和 PDF 导出
+   - `WriteupCrew` 只做确认与导出，不再改写正文；导出产物现包含 `pitch material Markdown`、`investment snapshot PPTX` 和 `PDF`
    - 生成 `cp06_writeup`
 
 ## 当前目录约定
@@ -182,8 +183,9 @@ analysis 目录额外保留：
 - `InvestmentThesisCrew`
   - 继续只读 7 个 analysis packs + 3 个 valuation packs + diligence
 - `Writeup`
-  - 只消费最终 Markdown 路径与 PDF 输出路径
-  - 不负责重写正文
+  - ???? Markdown ???? writeup ????? pack/thesis ????
+  - ?? `pitch material Markdown`?`investment snapshot PPTX` ? `PDF`
+  - ???????
 
 ## 当前运行时产物
 
@@ -218,6 +220,8 @@ analysis 目录额外保留：
 - `.cache/<run_slug>/md/checkpoints/`
 - `.cache/<run_slug>/md/run_manifest.json`
 - `.cache/<run_slug>/md/<pdf_stem>_v2_report.md`
+- `.cache/<run_slug>/md/<pdf_stem>_pitch_material.md`
+- `.cache/<run_slug>/md/<pdf_stem>_investment_snapshot.pptx`
 - `.cache/<run_slug>/md/<pdf_stem>_v2_report.pdf`
 - `.cache/live_tests/<suite_id>/suite_summary.json`
 - `.cache/live_tests/<suite_id>/suite_summary.md`
@@ -237,6 +241,8 @@ analysis 目录额外保留：
 - `diligence_questions_path`
 - `investment_thesis_path`
 - `final_report_markdown_path`
+- `pitch_material_markdown_path`
+- `investment_snapshot_ppt_path`
 - `final_report_pdf_path`
 - `console_log_file_path`
 - `crew_log_paths`

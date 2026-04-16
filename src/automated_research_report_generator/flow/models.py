@@ -115,6 +115,8 @@ class ResearchFlowState(BaseModel):
 
     final_report_markdown_path: str = ""
     final_report_pdf_path: str = ""
+    pitch_material_markdown_path: str = ""
+    investment_snapshot_ppt_path: str = ""
     failed_stage: str = ""
     failed_crew: str = ""
     error_message: str = ""

@@ -7,7 +7,7 @@ from crewai import LLM
 OPENROUTER_API_BASE = os.getenv("OPENROUTER_API_BASE", "https://openrouter.ai/api/v1")
 DEFAULT_HEAVY_MODEL = os.getenv(
     "HEAVY_LLM_MODEL",
-    "openrouter/google/gemini-3-flash-preview")
+    "openrouter/google/gemini-3.1-flash-lite-preview")
 DEFAULT_LITE_MODEL = os.getenv(
     "LITE_LLM_MODEL", 
     "openrouter/google/gemini-2.5-flash-lite")

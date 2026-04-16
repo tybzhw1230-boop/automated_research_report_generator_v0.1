@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
+from typing import get_args
 
 import pytest
 import automated_research_report_generator.tools.pdf_page_tools as pdf_page_tools
+from pydantic import ValidationError
 import automated_research_report_generator.tools.document_metadata_tools as document_metadata_tools_module
 from automated_research_report_generator.flow import pdf_indexing
 from automated_research_report_generator.flow import document_metadata as document_metadata_module
@@ -16,7 +18,9 @@ from automated_research_report_generator.flow.common import (
 )
 from automated_research_report_generator.flow.research_flow import ResearchReportFlow
 from automated_research_report_generator.tools.pdf_page_tools import (
+    PAGE_INDEX_ALLOWED_TOPICS,
     PdfPageIndexEntry,
+    ReadPdfPageIndexInput,
     ReadPdfPageIndexTool,
 )
 
@@ -336,7 +340,7 @@ def test_summarize_document_metadata_maps_new_fy_fq_fields(tmp_path, monkeypatch
 def test_base_inputs_include_period_placeholder_values_from_document_metadata(tmp_path) -> None:
     """
     目的：锁住 Flow 给各个 crew 注入的公共输入里包含期间占位符的实际值。
-    功能：验证 `_base_inputs()` 会把 metadata 的 `periods` 映射成 CrewAI 可插值的 `FY-3`、`FQ0/FY0` 等键。
+    功能：验证 `_base_inputs()` 会把 metadata 的 `periods` 映射成 CrewAI 可插值的 `FY-3`、`FQ0/FY0` 以及别名 `FQ0_OR_FY0` 等键。
     实现逻辑：先写入一个最小 metadata 文件，再构造 Flow 状态并直接读取 `_base_inputs()`。
     可调参数：`tmp_path` 由 pytest 提供，用于隔离临时 metadata 文件。
     默认参数及原因：只校验几个关键期间键，原因是这里关注的是占位符注入链路而不是 metadata 全字段序列化。
@@ -384,6 +388,7 @@ def test_base_inputs_include_period_placeholder_values_from_document_metadata(tm
     assert "FQ-1" in base_inputs
     assert base_inputs["FQ-1"] == ""
     assert base_inputs["FQ0/FY0"] == "2025Q1A"
+    assert base_inputs["FQ0_OR_FY0"] == "2025Q1A"
     assert base_inputs["FY1"] == ""
     assert base_inputs["FY5"] == ""
 
@@ -556,3 +561,65 @@ def test_read_pdf_page_index_tool_uses_explicit_pdf_path(tmp_path) -> None:
     result = ReadPdfPageIndexTool()._run(pdf_path=pdf_path.as_posix())
 
     assert '"pdf_file_path": "' + pdf_path.as_posix() + '"' in result
+
+
+def test_read_pdf_page_index_tool_filters_by_matched_topic_and_max_results(tmp_path) -> None:
+    """
+    设计目的：锁住页索引工具已经从模糊关键词过滤收紧为固定主题精确过滤。
+    模块功能：验证传入 `matched_topic` 后，只返回 `matched_topics` 包含该主题的页面，并在过滤后再执行结果截断。
+    实现逻辑：准备一份带 3 页索引的临时数据，分别覆盖“仅按主题过滤”和“主题过滤后再截断”两条路径。
+    可调参数：`tmp_path` 由 `pytest` 提供。
+    默认参数及原因：使用最小三页样本，原因是已足够覆盖命中、多命中和截断行为。
+    """
+
+    pdf_page_tools.reset_pdf_page_tool_runtime_state()
+    indexing_dir = tmp_path / ".cache" / "20260409_test-company" / "indexing"
+    pdf_page_tools.activate_page_index_directory(indexing_dir)
+    pdf_path = (tmp_path / "sample.pdf").resolve()
+    pdf_path.write_text("stub pdf", encoding="utf-8")
+
+    payload = pdf_page_tools.build_page_index_payload(
+        pdf_path,
+        [
+            PdfPageIndexEntry(page_number=1, topic="公司业务概览", matched_topics=["业务"]),
+            PdfPageIndexEntry(page_number=2, topic="核心产品与方案", matched_topics=["产品", "业务"]),
+            PdfPageIndexEntry(page_number=3, topic="风险提示", matched_topics=["风险"]),
+        ],
+    )
+    pdf_page_tools.save_page_index(payload)
+
+    filtered_result = json.loads(
+        ReadPdfPageIndexTool()._run(
+            pdf_path=pdf_path.as_posix(),
+            matched_topic="业务",
+        )
+    )
+    truncated_result = json.loads(
+        ReadPdfPageIndexTool()._run(
+            pdf_path=pdf_path.as_posix(),
+            matched_topic="业务",
+            max_results=1,
+        )
+    )
+    full_result = json.loads(ReadPdfPageIndexTool()._run(pdf_path=pdf_path.as_posix()))
+
+    assert [page["page_number"] for page in filtered_result["pages"]] == [1, 2]
+    assert all("业务" in page["matched_topics"] for page in filtered_result["pages"])
+    assert [page["page_number"] for page in truncated_result["pages"]] == [1]
+    assert [page["page_number"] for page in full_result["pages"]] == [1, 2, 3]
+
+
+def test_read_pdf_page_index_input_requires_valid_matched_topic_enum() -> None:
+    """
+    设计目的：锁住页索引工具输入契约已经改成固定主题枚举。
+    模块功能：验证非法 `matched_topic` 无法通过 schema 校验，合法枚举值集合与共享主题常量完全一致。
+    实现逻辑：先断言共享常量和 schema 注解枚举一致，再覆盖一条非法输入校验路径。
+    可调参数：无。
+    默认参数及原因：固定用一个非法主题字符串，原因是这里只关心枚举边界而不是具体业务语义。
+    """
+
+    matched_topic_annotation = ReadPdfPageIndexInput.model_fields["matched_topic"].annotation
+    assert set(get_args(get_args(matched_topic_annotation)[0])) == set(PAGE_INDEX_ALLOWED_TOPICS)
+
+    with pytest.raises(ValidationError, match="Input should be"):
+        ReadPdfPageIndexInput(pdf_path="/tmp/sample.pdf", matched_topic="随便筛")

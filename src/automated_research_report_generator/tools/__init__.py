@@ -20,6 +20,10 @@ _TOOL_IMPORTS = {
         "automated_research_report_generator.tools.markdown_to_pdf_tool",
         "MarkdownToPdfTool",
     ),
+    "InvestmentSnapshotPptTool": (
+        "automated_research_report_generator.tools.investment_snapshot_ppt_tool",
+        "InvestmentSnapshotPptTool",
+    ),
     "ComparableValuationTool": (
         "automated_research_report_generator.tools.valuation_tools",
         "ComparableValuationTool",

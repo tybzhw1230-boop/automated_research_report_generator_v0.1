@@ -13,6 +13,7 @@ from crewai import Agent
 from automated_research_report_generator.flow.common import append_preprocess_log_line
 from automated_research_report_generator.llm_config import get_heavy_llm
 from automated_research_report_generator.tools.pdf_page_tools import (
+    PAGE_INDEX_ALLOWED_TOPICS,
     PdfPageIndexEntry,
     build_page_index_payload,
     default_page_index_path,
@@ -46,27 +47,6 @@ PAGE_INDEX_FORCE_REBUILD_DEFAULT = False
 PAGE_INDEX_MAX_CONCURRENCY_DEFAULT = 100  # 默认并发保持 100，优先在处理速度与稳定性之间取平衡。
 PAGE_INDEX_RETRY_LIMIT_DEFAULT = 2
 PAGE_INDEX_RETRY_BASE_DELAY_SECONDS = 2.0
-PAGE_INDEX_ALLOWED_TOPICS = (
-    "行业",
-    "业务",
-    "产品",
-    "技术",
-    "财务",
-    "历史",
-    "公司治理",
-    "发行方案",
-    "估值",
-    "股东",
-    "风险",
-    "市场",
-    "竞争",
-    "募投项目",
-    "资产",
-    "目录",
-    "声明",
-    "封面",
-    "其他",
-)
 PAGE_INDEX_PROMPT_RULES = (
     f"给出一个中文短概括，长度不超过 {PAGE_INDEX_TOPIC_MAX_CHARS} 个字。",
     "短概括里要同时体现这一页的内容主题，以及它更像数据表、正文说明、目录、声明还是封面等页面类型。",
